@@ -27,6 +27,7 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "msi", "app"],
+    "icon": ["icons/icon.ico", "icons/icon.icns", "icons/icon.png"],
     "category": "DeveloperTool"
   }
 }
