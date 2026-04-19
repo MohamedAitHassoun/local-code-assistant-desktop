@@ -29,6 +29,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Ensure Tauri icons
+        shell: bash
+        run: |
+          if [ ! -f "src-tauri/icons/icon.ico" ]; then
+            npx tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
+          fi
+          ls -la src-tauri/icons
+
       - name: Build universal app bundle
         run: npm run tauri:build -- --target universal-apple-darwin --bundles app --no-sign
 
@@ -70,6 +78,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Ensure Tauri icons
+        shell: bash
+        run: |
+          if [ ! -f "src-tauri/icons/icon.ico" ]; then
+            npx tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
+          fi
+          ls -la src-tauri/icons
 
       - name: Build MSI
         run: npm run tauri:build -- --bundles msi --no-sign
