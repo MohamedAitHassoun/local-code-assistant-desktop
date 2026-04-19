@@ -1,0 +1,82 @@
+name: Build Installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos-universal:
+    name: macOS Universal (app + dmg)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build universal app bundle
+        run: npm run tauri:build -- --target universal-apple-darwin --bundles app --no-sign
+
+      - name: Create universal dmg
+        shell: bash
+        run: |
+          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Local Code Assistant.app"
+          DMG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/dmg"
+          DMG_PATH="$DMG_DIR/Local Code Assistant_universal.dmg"
+
+          mkdir -p "$DMG_DIR"
+          hdiutil create -volname "Local Code Assistant" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-installers
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/Local Code Assistant.app
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  windows-msi:
+    name: Windows MSI
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build MSI
+        run: npm run tauri:build -- --bundles msi --no-sign
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-installer
+          path: src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
