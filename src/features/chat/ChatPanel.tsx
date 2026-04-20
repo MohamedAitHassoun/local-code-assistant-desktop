@@ -159,12 +159,12 @@ export function ChatPanel({
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void handleSubmit();
             }
           }}
-          placeholder="Ask a programming question... (Ctrl/Cmd + Enter to send)"
+          placeholder="Ask a programming question... (Enter to send, Shift+Enter for new line)"
           className="h-28 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink/50 focus:ring"
         />
         <div className="mt-2 flex items-center justify-between">

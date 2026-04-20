@@ -16,6 +16,10 @@ export async function listOllamaModels(endpoint: string): Promise<OllamaModel[]>
   return invoke("ollama_list_models", { endpoint });
 }
 
+export async function searchOllamaModels(query: string, limit = 120): Promise<string[]> {
+  return invoke("ollama_search_models", { query, limit });
+}
+
 export async function installOllama(): Promise<string> {
   return invoke("install_ollama");
 }

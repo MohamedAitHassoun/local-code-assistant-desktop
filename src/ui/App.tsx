@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { ChatPanel } from "@/features/chat/ChatPanel";
@@ -14,6 +14,7 @@ import {
   checkOllamaStatus,
   installOllama,
   listOllamaModels,
+  searchOllamaModels,
   startOllama,
   streamOllamaPull
 } from "@/services/ollama/client";
@@ -430,6 +431,10 @@ export default function App() {
     await refreshOllama(endpoint);
   };
 
+  const handleSearchModels = useCallback(async (query: string) => {
+    return searchOllamaModels(query, 120);
+  }, []);
+
   const handlePullModel = async (
     endpoint: string,
     modelName: string,
@@ -729,6 +734,7 @@ export default function App() {
         onSave={handleSaveSettings}
         onClearHistory={handleClearHistory}
         onRefreshModels={handleRefreshModels}
+        onSearchModels={handleSearchModels}
         onPullModel={handlePullModel}
       />
 

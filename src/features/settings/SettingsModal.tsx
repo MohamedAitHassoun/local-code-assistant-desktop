@@ -16,6 +16,7 @@ interface SettingsModalProps {
   onSave: (settings: AppSettings) => Promise<void>;
   onClearHistory: () => Promise<void>;
   onRefreshModels: (endpoint: string) => Promise<void>;
+  onSearchModels: (query: string) => Promise<string[]>;
   onPullModel: (
     endpoint: string,
     modelName: string,
@@ -23,24 +24,11 @@ interface SettingsModalProps {
   ) => Promise<void>;
 }
 
-interface ModelOption {
+interface ModelCatalogOption {
   name: string;
   size?: number;
   installed: boolean;
-  recommended: boolean;
 }
-
-const RECOMMENDED_MODEL_NAMES = [
-  "tinyllama:1.1b",
-  "qwen2.5-coder:7b",
-  "qwen2.5-coder:14b",
-  "deepseek-coder:6.7b",
-  "codellama:7b",
-  "llama3.2:3b",
-  "phi3:mini",
-  "mistral:7b",
-  "gemma2:9b"
-];
 
 export function SettingsModal({
   open,
@@ -51,11 +39,17 @@ export function SettingsModal({
   onSave,
   onClearHistory,
   onRefreshModels,
+  onSearchModels,
   onPullModel
 }: SettingsModalProps) {
   const [form, setForm] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
+
   const [modelSearch, setModelSearch] = useState("");
+  const [catalogModels, setCatalogModels] = useState<string[]>([]);
+  const [searchingCatalog, setSearchingCatalog] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+
   const [customModelName, setCustomModelName] = useState("");
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [downloadingModel, setDownloadingModel] = useState(false);
@@ -64,64 +58,92 @@ export function SettingsModal({
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
+  const installedModelOptions = useMemo(
+    () => [...models].sort((a, b) => a.name.localeCompare(b.name)),
+    [models]
+  );
+
+  const installedModelMap = useMemo(
+    () => new Map(installedModelOptions.map((model) => [model.name, model])),
+    [installedModelOptions]
+  );
+
+  const catalogOptions = useMemo((): ModelCatalogOption[] => {
+    const query = modelSearch.trim().toLowerCase();
+    const names: string[] = [];
+    const seen = new Set<string>();
+
+    for (const modelName of catalogModels) {
+      const trimmed = modelName.trim();
+      if (!trimmed) continue;
+      if (query && !trimmed.toLowerCase().includes(query)) continue;
+      if (seen.has(trimmed)) continue;
+      names.push(trimmed);
+      seen.add(trimmed);
+    }
+
+    for (const model of installedModelOptions) {
+      if (query && !model.name.toLowerCase().includes(query)) continue;
+      if (seen.has(model.name)) continue;
+      names.push(model.name);
+      seen.add(model.name);
+    }
+
+    return names.map((name) => {
+      const installed = installedModelMap.get(name);
+      return {
+        name,
+        size: installed?.size,
+        installed: Boolean(installed)
+      };
+    });
+  }, [catalogModels, installedModelMap, installedModelOptions, modelSearch]);
+
   useEffect(() => {
     setForm(settings);
   }, [settings]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      return;
+    }
+
     setCustomModelName(settings.modelName);
   }, [open, settings.modelName]);
 
-  const modelOptions = useMemo(() => {
-    const names = new Set<string>();
-    const combined = [
-      ...RECOMMENDED_MODEL_NAMES.map((name) => ({ name })),
-      ...models
-    ].filter((model) => {
-      if (names.has(model.name)) return false;
-      names.add(model.name);
-      return true;
-    });
-
-    return combined;
-  }, [models]);
-
-  const modelCatalog = useMemo((): ModelOption[] => {
-    const installedMap = new Map(models.map((model) => [model.name, model]));
-    const options: ModelOption[] = [];
-    const seen = new Set<string>();
-
-    for (const modelName of RECOMMENDED_MODEL_NAMES) {
-      const installed = installedMap.get(modelName);
-      options.push({
-        name: modelName,
-        size: installed?.size,
-        installed: Boolean(installed),
-        recommended: true
-      });
-      seen.add(modelName);
+  useEffect(() => {
+    if (!open) {
+      return;
     }
 
-    for (const model of models) {
-      if (seen.has(model.name)) continue;
-      options.push({
-        name: model.name,
-        size: model.size,
-        installed: true,
-        recommended: false
-      });
-      seen.add(model.name);
-    }
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setSearchingCatalog(true);
+      setCatalogError(null);
+      try {
+        const results = await onSearchModels(modelSearch.trim());
+        if (active) {
+          setCatalogModels(results);
+        }
+      } catch (error) {
+        if (active) {
+          const message =
+            error instanceof Error ? error.message : "Failed to search models from registry.";
+          setCatalogError(message);
+          setCatalogModels([]);
+        }
+      } finally {
+        if (active) {
+          setSearchingCatalog(false);
+        }
+      }
+    }, 350);
 
-    return options;
-  }, [models]);
-
-  const filteredModelCatalog = useMemo(() => {
-    const needle = modelSearch.trim().toLowerCase();
-    if (!needle) return modelCatalog;
-    return modelCatalog.filter((option) => option.name.toLowerCase().includes(needle));
-  }, [modelCatalog, modelSearch]);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [modelSearch, onSearchModels, open]);
 
   if (!open) {
     return null;
@@ -134,7 +156,13 @@ export function SettingsModal({
   const submit = async () => {
     setSaving(true);
     try {
-      await onSave(form);
+      const selectedModel = form.modelName.trim();
+      const fallbackModel = installedModelOptions[0]?.name ?? settings.modelName;
+
+      await onSave({
+        ...form,
+        modelName: selectedModel || fallbackModel
+      });
       onClose();
     } finally {
       setSaving(false);
@@ -192,6 +220,11 @@ export function SettingsModal({
     }
   };
 
+  const selectedInstalledModelExists = installedModelOptions.some(
+    (model) => model.name === form.modelName
+  );
+  const modelSelectValue = selectedInstalledModelExists ? form.modelName : "";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
       <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-xl border border-border bg-panel p-5 shadow-panel">
@@ -208,16 +241,16 @@ export function SettingsModal({
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="text-sm text-ink">
-            Model name
+            Model to use (installed only)
             <select
-              value={form.modelName}
+              value={modelSelectValue}
               onChange={(event) => updateForm("modelName", event.target.value)}
               className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
             >
-              {!modelOptions.some((option) => option.name === form.modelName) && (
-                <option value={form.modelName}>{form.modelName}</option>
-              )}
-              {modelOptions.map((model) => (
+              <option value="" disabled>
+                {installedModelOptions.length > 0 ? "Select installed model" : "No installed models yet"}
+              </option>
+              {installedModelOptions.map((model) => (
                 <option key={model.name} value={model.name}>
                   {model.name}
                 </option>
@@ -249,8 +282,8 @@ export function SettingsModal({
             </div>
 
             <p className="mb-3 text-xs text-ink/70">
-              Download and manage Ollama models directly from the app. Downloaded models are saved
-              on the user system.
+              Search the Ollama model registry, download models in-app, and use installed models
+              directly.
             </p>
 
             {!ollamaStatus?.installed && (
@@ -289,14 +322,19 @@ export function SettingsModal({
               value={modelSearch}
               onChange={(event) => setModelSearch(event.target.value)}
               className="mb-2 w-full rounded border border-border bg-white px-3 py-2 text-sm"
-              placeholder="Search models..."
+              placeholder="Search Ollama models..."
             />
 
-            <div className="max-h-48 space-y-1 overflow-auto rounded border border-border bg-white p-2">
-              {filteredModelCatalog.length === 0 ? (
-                <p className="text-xs text-ink/60">No models match your search.</p>
+            <div className="mb-2 flex items-center gap-2 text-[11px] text-ink/60">
+              {searchingCatalog ? <span>Searching registry...</span> : <span>Registry search ready.</span>}
+              {catalogError && <span className="text-danger">{catalogError}</span>}
+            </div>
+
+            <div className="max-h-52 space-y-1 overflow-auto rounded border border-border bg-white p-2">
+              {catalogOptions.length === 0 ? (
+                <p className="text-xs text-ink/60">No models found for this search.</p>
               ) : (
-                filteredModelCatalog.map((option) => (
+                catalogOptions.map((option) => (
                   <div
                     key={option.name}
                     className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1.5"
@@ -307,11 +345,6 @@ export function SettingsModal({
                         {option.installed && (
                           <span className="rounded border border-success/30 bg-green-50 px-1 text-success">
                             Installed
-                          </span>
-                        )}
-                        {option.recommended && (
-                          <span className="rounded border border-accent/30 bg-blue-50 px-1 text-accent">
-                            Recommended
                           </span>
                         )}
                         {typeof option.size === "number" && <span>{formatBytes(option.size)}</span>}

@@ -1917,6 +1917,111 @@ async fn ollama_list_models(endpoint: String) -> Result<Vec<OllamaModel>, String
     Ok(parsed.models)
 }
 
+fn is_model_name_char(ch: char) -> bool {
+    ch.is_ascii_lowercase()
+        || ch.is_ascii_digit()
+        || ch == '-'
+        || ch == '_'
+        || ch == '.'
+        || ch == ':'
+}
+
+fn extract_registry_model_names(html: &str, query_lower: &str, limit: usize) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (index, _) in html.match_indices("/library/") {
+        let mut name = String::new();
+        for ch in html[index + "/library/".len()..].chars() {
+            if is_model_name_char(ch) {
+                name.push(ch);
+            } else {
+                break;
+            }
+        }
+
+        if name.is_empty() || name == "library" || name == "models" || name == "search" {
+            continue;
+        }
+
+        if !query_lower.is_empty() && !name.to_ascii_lowercase().contains(query_lower) {
+            continue;
+        }
+
+        if seen.insert(name.clone()) {
+            results.push(name);
+            if results.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    results
+}
+
+#[tauri::command]
+async fn ollama_search_models(query: String, limit: Option<usize>) -> Result<Vec<String>, String> {
+    let query_trimmed = query.trim().to_string();
+    let query_lower = query_trimmed.to_ascii_lowercase();
+    let safe_limit = limit.unwrap_or(120).clamp(5, 400);
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    let sources = [
+        "https://registry.ollama.ai/search",
+        "https://registry.ollama.ai/models",
+        "https://registry.ollama.ai/library",
+    ];
+
+    let mut merged = Vec::<String>::new();
+    let mut seen = HashSet::<String>::new();
+
+    for source in sources {
+        let response = client
+            .get(source)
+            .query(&[("q", query_trimmed.as_str())])
+            .send()
+            .await
+            .map_err(|err| format!("Failed to reach Ollama model registry: {err}"))?;
+
+        if !response.status().is_success() {
+            continue;
+        }
+
+        let body = response
+            .text()
+            .await
+            .map_err(|err| format!("Invalid response from Ollama model registry: {err}"))?;
+
+        let names = extract_registry_model_names(&body, &query_lower, safe_limit);
+        for name in names {
+            if seen.insert(name.clone()) {
+                merged.push(name);
+                if merged.len() >= safe_limit {
+                    break;
+                }
+            }
+        }
+
+        if merged.len() >= safe_limit {
+            break;
+        }
+    }
+
+    if merged.is_empty() {
+        return Err(
+            "No models found from the Ollama registry right now. Try a different search."
+                .to_string(),
+        );
+    }
+
+    Ok(merged)
+}
+
 #[tauri::command]
 async fn start_ollama_chat(
     app: AppHandle,
@@ -2017,6 +2122,7 @@ fn main() {
             apply_file_operations,
             ollama_status,
             ollama_list_models,
+            ollama_search_models,
             install_ollama,
             start_ollama,
             start_ollama_chat,

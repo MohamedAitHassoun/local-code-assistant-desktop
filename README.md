@@ -14,7 +14,7 @@ It provides a mini-IDE experience with file/project browsing, Monaco editing, AI
   - status checks (installed/running)
   - in-app onboarding actions (install/start/refresh)
   - local model listing
-  - in-app model manager (search + download/pull + set active model)
+  - in-app model manager (search Ollama registry + download/pull + set active model)
   - streamed chat responses
   - configurable endpoint/model/temperature/max tokens
 - Context ingestion for additional file types:
@@ -177,7 +177,7 @@ Artifacts:
 
 - Model name
 - Ollama endpoint
-- In-app model search/download (saved locally by Ollama)
+- In-app model search/download (from Ollama registry, saved locally by Ollama)
 - Temperature
 - Max tokens
 - Include current file automatically
