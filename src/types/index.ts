@@ -169,6 +169,17 @@ export interface OllamaStreamEvent {
   error?: string;
 }
 
+export interface OllamaPullStreamEvent {
+  requestId: string;
+  model: string;
+  status?: string;
+  completed?: number | null;
+  total?: number | null;
+  percent?: number | null;
+  done: boolean;
+  error?: string;
+}
+
 export interface OllamaChatRequest {
   endpoint: string;
   model: string;

@@ -10,7 +10,13 @@ import { ProjectExplorer } from "@/features/projects/ProjectExplorer";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { basename, buildTimestamp, dirname, normalizePath } from "@/lib/utils";
 import { applyFileOperations, readTextFile, saveTextFile, scanProject } from "@/services/fileSystem";
-import { checkOllamaStatus, installOllama, listOllamaModels, startOllama } from "@/services/ollama/client";
+import {
+  checkOllamaStatus,
+  installOllama,
+  listOllamaModels,
+  startOllama,
+  streamOllamaPull
+} from "@/services/ollama/client";
 import { runProjectCommand } from "@/services/terminal/commands";
 import {
   addRecentProject,
@@ -27,7 +33,13 @@ import { useEditorStore } from "@/stores/editorStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { TopToolbar } from "./layout/TopToolbar";
-import type { ChatMessage, OllamaModel, OllamaStatus, RecentProject } from "@/types";
+import type {
+  ChatMessage,
+  OllamaModel,
+  OllamaPullStreamEvent,
+  OllamaStatus,
+  RecentProject
+} from "@/types";
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -369,7 +381,7 @@ export default function App() {
     }
 
     if (!ollamaStatus.installed) {
-      return "Install Ollama from https://ollama.com/download, then pull a model such as: ollama pull tinyllama:1.1b (fast test) or ollama pull qwen2.5-coder:7b";
+      return "Install Ollama from https://ollama.com/download. Then use Settings -> Model Manager to download models directly in the app.";
     }
 
     if (!ollamaStatus.running) {
@@ -412,6 +424,28 @@ export default function App() {
 
   const handleRefreshOllama = async () => {
     await refreshOllama(settings.ollamaEndpoint);
+  };
+
+  const handleRefreshModels = async (endpoint: string) => {
+    await refreshOllama(endpoint);
+  };
+
+  const handlePullModel = async (
+    endpoint: string,
+    modelName: string,
+    onProgress: (event: OllamaPullStreamEvent) => void
+  ) => {
+    const status = await checkOllamaStatus(endpoint);
+    if (!status.installed) {
+      throw new Error("Ollama is not installed. Install it first, then download models.");
+    }
+
+    if (!status.running) {
+      await startOllama(endpoint);
+    }
+
+    await streamOllamaPull(endpoint, modelName, onProgress);
+    await refreshOllama(endpoint);
   };
 
   const handleSaveSettings = async (nextSettings: typeof settings) => {
@@ -690,9 +724,12 @@ export default function App() {
         open={settingsOpen}
         settings={settings}
         models={models}
+        ollamaStatus={ollamaStatus}
         onClose={() => setSettingsOpen(false)}
         onSave={handleSaveSettings}
         onClearHistory={handleClearHistory}
+        onRefreshModels={handleRefreshModels}
+        onPullModel={handlePullModel}
       />
 
       {pendingEdit && !pendingFilePlan && (

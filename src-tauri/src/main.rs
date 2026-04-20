@@ -181,6 +181,19 @@ struct OllamaStreamEvent {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OllamaPullStreamEvent {
+    request_id: String,
+    model: String,
+    status: Option<String>,
+    completed: Option<u64>,
+    total: Option<u64>,
+    percent: Option<f64>,
+    done: bool,
+    error: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OllamaTagsResponse {
@@ -804,6 +817,10 @@ fn emit_ollama_event(app: &AppHandle, payload: OllamaStreamEvent) {
     let _ = app.emit("ollama_stream", payload);
 }
 
+fn emit_ollama_pull_event(app: &AppHandle, payload: OllamaPullStreamEvent) {
+    let _ = app.emit("ollama_pull_stream", payload);
+}
+
 async fn stream_ollama_response(
     app: AppHandle,
     request: OllamaChatRequest,
@@ -916,6 +933,141 @@ async fn stream_ollama_response(
             OllamaStreamEvent {
                 request_id,
                 delta: None,
+                done: true,
+                error: None,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+async fn stream_ollama_pull(
+    app: AppHandle,
+    endpoint: String,
+    model: String,
+    request_id: String,
+) -> Result<(), String> {
+    let normalized = normalize_endpoint(&endpoint);
+    let trimmed_model = model.trim().to_string();
+    if trimmed_model.is_empty() {
+        return Err("Model name cannot be empty.".to_string());
+    }
+
+    let url = format!("{normalized}/api/pull");
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(60 * 60))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    let response = client
+        .post(url)
+        .json(&json!({
+            "model": trimmed_model,
+            "stream": true
+        }))
+        .send()
+        .await
+        .map_err(|err| format!("Failed to reach Ollama endpoint: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        return Err(format!("Ollama pull failed ({status}): {body}"));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut done = false;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|err| format!("Streaming error from Ollama: {err}"))?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(index) = buffer.find('\n') {
+            let line = buffer[..index].trim().to_string();
+            buffer.drain(..=index);
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let value: Value = serde_json::from_str(&line)
+                .map_err(|err| format!("Failed to parse Ollama pull stream chunk: {err}"))?;
+
+            if let Some(error) = value.get("error").and_then(|value| value.as_str()) {
+                return Err(error.to_string());
+            }
+
+            let status = value
+                .get("status")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let completed = value.get("completed").and_then(|value| value.as_u64());
+            let total = value.get("total").and_then(|value| value.as_u64());
+            let percent = match (completed, total) {
+                (Some(completed_value), Some(total_value)) if total_value > 0 => {
+                    Some((completed_value as f64 / total_value as f64) * 100.0)
+                }
+                _ => None,
+            };
+
+            let status_done = status
+                .as_deref()
+                .map(|text| {
+                    let lowered = text.to_ascii_lowercase();
+                    lowered.contains("success")
+                        || lowered.contains("already exists")
+                        || lowered.contains("completed")
+                })
+                .unwrap_or(false);
+
+            let is_done = value
+                .get("done")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || status_done;
+
+            emit_ollama_pull_event(
+                &app,
+                OllamaPullStreamEvent {
+                    request_id: request_id.clone(),
+                    model: trimmed_model.clone(),
+                    status,
+                    completed,
+                    total,
+                    percent,
+                    done: is_done,
+                    error: None,
+                },
+            );
+
+            if is_done {
+                done = true;
+                break;
+            }
+        }
+
+        if done {
+            break;
+        }
+    }
+
+    if !done {
+        emit_ollama_pull_event(
+            &app,
+            OllamaPullStreamEvent {
+                request_id,
+                model: trimmed_model,
+                status: Some("Pull completed.".to_string()),
+                completed: None,
+                total: None,
+                percent: Some(100.0),
                 done: true,
                 error: None,
             },
@@ -1788,6 +1940,36 @@ async fn start_ollama_chat(
     Ok(())
 }
 
+#[tauri::command]
+async fn start_ollama_pull(
+    app: AppHandle,
+    endpoint: String,
+    model: String,
+    request_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) =
+            stream_ollama_pull(app.clone(), endpoint, model.clone(), request_id.clone()).await
+        {
+            emit_ollama_pull_event(
+                &app,
+                OllamaPullStreamEvent {
+                    request_id,
+                    model,
+                    status: None,
+                    completed: None,
+                    total: None,
+                    percent: None,
+                    done: true,
+                    error: Some(error),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -1838,6 +2020,7 @@ fn main() {
             install_ollama,
             start_ollama,
             start_ollama_chat,
+            start_ollama_pull,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
