@@ -13,8 +13,12 @@ interface TopToolbarProps {
   ollamaStatus: OllamaStatus | null;
 }
 
-function StatusChip({ status }: { status: OllamaStatus | null }) {
-  if (!status) {
+function StatusChip({
+  ollamaStatus
+}: {
+  ollamaStatus: OllamaStatus | null;
+}) {
+  if (!ollamaStatus) {
     return (
       <span className="rounded-full border border-border/80 bg-white/70 px-3 py-1 text-xs text-ink/70">
         Checking Ollama...
@@ -22,7 +26,7 @@ function StatusChip({ status }: { status: OllamaStatus | null }) {
     );
   }
 
-  if (!status.installed) {
+  if (!ollamaStatus.installed) {
     return (
       <span className="rounded-full border border-danger/40 bg-red-50 px-3 py-1 text-xs text-danger">
         Ollama not installed
@@ -30,7 +34,7 @@ function StatusChip({ status }: { status: OllamaStatus | null }) {
     );
   }
 
-  if (!status.running) {
+  if (!ollamaStatus.running) {
     return (
       <span className="rounded-full border border-warning/40 bg-amber-50 px-3 py-1 text-xs text-warning">
         Ollama not running
@@ -101,7 +105,7 @@ export function TopToolbar({
         <span className="rounded-full border border-accent/30 bg-accentSoft px-3 py-1 text-xs text-accent">
           {activeModel}
         </span>
-        <StatusChip status={ollamaStatus} />
+        <StatusChip ollamaStatus={ollamaStatus} />
         <ToolbarButton label="Settings" onClick={onOpenSettings} />
       </div>
     </header>

@@ -2,6 +2,14 @@ export type ChatRole = "system" | "user" | "assistant";
 
 export interface AppSettings {
   modelName: string;
+  displayModelLabel: string;
+  agenticMode: boolean;
+  autoApplyFilePlans: boolean;
+  autoApproveActions: boolean;
+  workingOnlyMode: boolean;
+  autonomousAgentEnabled: boolean;
+  fullAccessMode: boolean;
+  maxAgentSteps: number;
   ollamaEndpoint: string;
   temperature: number;
   maxTokens: number;
@@ -113,6 +121,7 @@ export interface SuggestedEdit {
   originalContent: string;
   proposedContent: string;
   reason: string;
+  autoApply?: boolean;
   sourceMessageId?: string;
   createdAt: string;
 }
@@ -145,6 +154,7 @@ export interface SuggestedFilePlan {
   id: string;
   operations: SuggestedFileOperation[];
   reason: string;
+  autoApply?: boolean;
   sourceMessageId?: string;
   createdAt: string;
 }

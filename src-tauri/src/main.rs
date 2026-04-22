@@ -35,6 +35,14 @@ struct AppState {
 #[serde(rename_all = "camelCase", default)]
 struct AppSettings {
     model_name: String,
+    display_model_label: String,
+    agentic_mode: bool,
+    auto_apply_file_plans: bool,
+    auto_approve_actions: bool,
+    working_only_mode: bool,
+    autonomous_agent_enabled: bool,
+    full_access_mode: bool,
+    max_agent_steps: u32,
     ollama_endpoint: String,
     temperature: f32,
     max_tokens: u32,
@@ -154,6 +162,14 @@ struct OllamaStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CodexStatus {
+    installed: bool,
+    message: String,
+    detected_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OllamaModel {
     name: String,
     size: Option<u64>,
@@ -174,6 +190,16 @@ struct OllamaChatRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CodexChatRequest {
+    system_prompt: String,
+    user_prompt: String,
+    profile: Option<String>,
+    model: Option<String>,
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OllamaStreamEvent {
     request_id: String,
     delta: Option<String>,
@@ -190,6 +216,16 @@ struct OllamaPullStreamEvent {
     completed: Option<u64>,
     total: Option<u64>,
     percent: Option<f64>,
+    done: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexStreamEvent {
+    request_id: String,
+    delta: Option<String>,
+    status: Option<String>,
     done: bool,
     error: Option<String>,
 }
@@ -236,6 +272,14 @@ impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
             model_name: "qwen2.5-coder:7b".to_string(),
+            display_model_label: String::new(),
+            agentic_mode: true,
+            auto_apply_file_plans: false,
+            auto_approve_actions: false,
+            working_only_mode: true,
+            autonomous_agent_enabled: true,
+            full_access_mode: true,
+            max_agent_steps: 8,
             ollama_endpoint: "http://127.0.0.1:11434".to_string(),
             temperature: 0.2,
             max_tokens: 2048,
@@ -566,16 +610,32 @@ fn resolve_read_path(path: &str, allowed_root: Option<&str>) -> Result<PathBuf, 
 fn resolve_write_path(path: &str, allowed_root: Option<&str>) -> Result<PathBuf, String> {
     let target = PathBuf::from(path);
 
-    let canonical = if target.exists() {
+    let candidate = if target.exists() {
         fs::canonicalize(&target).map_err(|_| format!("Cannot access file: {path}"))?
     } else {
-        let parent = target
-            .parent()
-            .ok_or_else(|| "Target file path has no parent directory.".to_string())?;
-        let canonical_parent = fs::canonicalize(parent)
-            .map_err(|_| format!("Cannot access target directory: {}", parent.display()))?;
+        // Allow writing new files inside existing directories. We do not create directories here.
+        // This keeps regular "save file" behavior strict while supporting safe path checks.
+        let mut cursor = target.parent();
+        let mut existing_ancestor: Option<PathBuf> = None;
+        while let Some(path) = cursor {
+            if path.exists() {
+                existing_ancestor = Some(path.to_path_buf());
+                break;
+            }
+            cursor = path.parent();
+        }
 
-        canonical_parent.join(
+        let ancestor = existing_ancestor.ok_or_else(|| {
+            let parent_display = target
+                .parent()
+                .map(|value| value.display().to_string())
+                .unwrap_or_else(|| ".".to_string());
+            format!("Cannot access target directory: {parent_display}")
+        })?;
+
+        let canonical_ancestor = fs::canonicalize(&ancestor)
+            .map_err(|_| format!("Cannot access target directory: {}", ancestor.display()))?;
+        canonical_ancestor.join(
             target
                 .file_name()
                 .ok_or_else(|| "Invalid target file name.".to_string())?,
@@ -585,14 +645,14 @@ fn resolve_write_path(path: &str, allowed_root: Option<&str>) -> Result<PathBuf,
     if let Some(root) = allowed_root {
         let root_canonical =
             fs::canonicalize(root).map_err(|_| format!("Invalid allowed root: {root}"))?;
-        if !canonical.starts_with(&root_canonical) {
+        if !candidate.starts_with(&root_canonical) {
             return Err(
                 "Permission denied: write is outside the allowed project scope.".to_string(),
             );
         }
     }
 
-    Ok(canonical)
+    Ok(candidate)
 }
 
 fn sanitize_relative_path(relative_path: &str) -> Result<String, String> {
@@ -624,27 +684,37 @@ fn resolve_relative_target_path(
     let safe_relative = sanitize_relative_path(relative_path)?;
     let target = project_root.join(&safe_relative);
 
-    let canonical_target = if target.exists() {
-        fs::canonicalize(&target)
-            .map_err(|_| format!("Cannot access file: {}", target.display()))?
-    } else {
-        let parent = target
-            .parent()
-            .ok_or_else(|| "Target file path has no parent directory.".to_string())?;
-        let canonical_parent = fs::canonicalize(parent)
-            .map_err(|_| format!("Cannot access target directory: {}", parent.display()))?;
-        canonical_parent.join(
-            target
-                .file_name()
-                .ok_or_else(|| "Invalid target file name.".to_string())?,
-        )
-    };
+    if target.exists() {
+        let canonical_target = fs::canonicalize(&target)
+            .map_err(|_| format!("Cannot access file: {}", target.display()))?;
+        if !canonical_target.starts_with(project_root) {
+            return Err("Permission denied: operation outside project root.".to_string());
+        }
+        return Ok(canonical_target);
+    }
 
-    if !canonical_target.starts_with(project_root) {
+    // For new paths, canonicalize the nearest existing ancestor to prevent symlink escape,
+    // while still allowing creation of nested directories that do not yet exist.
+    let mut cursor = target.parent();
+    let mut existing_ancestor: Option<PathBuf> = None;
+    while let Some(path) = cursor {
+        if path.exists() {
+            existing_ancestor = Some(path.to_path_buf());
+            break;
+        }
+        cursor = path.parent();
+    }
+
+    let ancestor = existing_ancestor
+        .ok_or_else(|| format!("Cannot access target directory: {}", project_root.display()))?;
+    let canonical_ancestor = fs::canonicalize(&ancestor)
+        .map_err(|_| format!("Cannot access target directory: {}", ancestor.display()))?;
+
+    if !canonical_ancestor.starts_with(project_root) {
         return Err("Permission denied: operation outside project root.".to_string());
     }
 
-    Ok(canonical_target)
+    Ok(target)
 }
 
 fn is_binary(bytes: &[u8]) -> bool {
@@ -819,6 +889,10 @@ fn emit_ollama_event(app: &AppHandle, payload: OllamaStreamEvent) {
 
 fn emit_ollama_pull_event(app: &AppHandle, payload: OllamaPullStreamEvent) {
     let _ = app.emit("ollama_pull_stream", payload);
+}
+
+fn emit_codex_event(app: &AppHandle, payload: CodexStreamEvent) {
+    let _ = app.emit("codex_stream", payload);
 }
 
 async fn stream_ollama_response(
@@ -1073,6 +1147,173 @@ async fn stream_ollama_pull(
             },
         );
     }
+
+    Ok(())
+}
+
+fn first_non_empty_line(input: &str) -> Option<String> {
+    input
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.to_string())
+}
+
+fn human_status_for_codex_event(event_type: &str) -> Option<&'static str> {
+    match event_type {
+        "thread.started" => Some("Session started."),
+        "turn.started" => Some("Generating response..."),
+        "turn.completed" => Some("Response complete."),
+        _ => None,
+    }
+}
+
+async fn stream_codex_response(
+    app: AppHandle,
+    request: CodexChatRequest,
+    request_id: String,
+) -> Result<(), String> {
+    let codex_binary = locate_codex_binary()
+        .ok_or_else(|| "Codex CLI was not detected locally. Install Codex CLI first.".to_string())?;
+
+    let mut command = AsyncCommand::new(&codex_binary);
+    command
+        .arg("exec")
+        .arg("--json")
+        .arg("--skip-git-repo-check")
+        .arg("--sandbox")
+        .arg("read-only");
+
+    if let Some(profile) = request.profile.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    {
+        command.arg("-p").arg(profile);
+    }
+
+    if let Some(model) = request.model.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        command.arg("-m").arg(model);
+    }
+
+    if let Some(project_root) = request
+        .project_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.arg("-C").arg(project_root);
+    }
+
+    let merged_prompt = format!(
+        "{}\n\n{}",
+        request.system_prompt.trim(),
+        request.user_prompt.trim()
+    );
+    command.arg(merged_prompt);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    emit_codex_event(
+        &app,
+        CodexStreamEvent {
+            request_id: request_id.clone(),
+            delta: None,
+            status: Some("Starting Codex...".to_string()),
+            done: false,
+            error: None,
+        },
+    );
+
+    let output = timeout(Duration::from_secs(600), command.output())
+        .await
+        .map_err(|_| "Codex request timed out after 10 minutes.".to_string())?
+        .map_err(|err| format!("Failed to run Codex CLI: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let mut has_emitted_answer = false;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parsed = match serde_json::from_str::<Value>(trimmed) {
+            Ok(value) => value,
+            Err(_) => {
+                // Codex can print non-JSON warnings, especially during plugin sync.
+                continue;
+            }
+        };
+
+        let event_type = parsed
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+
+        if let Some(status) = human_status_for_codex_event(event_type) {
+            emit_codex_event(
+                &app,
+                CodexStreamEvent {
+                    request_id: request_id.clone(),
+                    delta: None,
+                    status: Some(status.to_string()),
+                    done: false,
+                    error: None,
+                },
+            );
+            continue;
+        }
+
+        if event_type == "item.completed" {
+            let item = parsed.get("item");
+            let item_type = item
+                .and_then(|value| value.get("type"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+
+            if item_type == "agent_message" {
+                if let Some(text) = item
+                    .and_then(|value| value.get("text"))
+                    .and_then(|value| value.as_str())
+                {
+                    if !text.trim().is_empty() {
+                        has_emitted_answer = true;
+                        emit_codex_event(
+                            &app,
+                            CodexStreamEvent {
+                                request_id: request_id.clone(),
+                                delta: Some(text.to_string()),
+                                status: None,
+                                done: false,
+                                error: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if !output.status.success() {
+        let error_line = first_non_empty_line(&stderr)
+            .or_else(|| first_non_empty_line(&stdout))
+            .unwrap_or_else(|| "Codex command failed.".to_string());
+        return Err(format!("Codex execution failed: {error_line}"));
+    }
+
+    if !has_emitted_answer {
+        return Err("Codex completed but did not return an assistant message.".to_string());
+    }
+
+    emit_codex_event(
+        &app,
+        CodexStreamEvent {
+            request_id,
+            delta: None,
+            status: None,
+            done: true,
+            error: None,
+        },
+    );
 
     Ok(())
 }
@@ -1524,13 +1765,15 @@ async fn run_project_command(
         .and_then(|json| serde_json::from_str::<AppSettings>(json).ok())
         .unwrap_or_else(default_settings);
 
-    if !stored_settings.command_execution_enabled {
+    let full_access_mode = stored_settings.full_access_mode;
+
+    if !stored_settings.command_execution_enabled && !full_access_mode {
         return Err(
             "Command execution is disabled in settings. Enable it first in Settings.".to_string(),
         );
     }
 
-    if !stored_settings.allow_any_command {
+    if !stored_settings.allow_any_command && !full_access_mode {
         if has_blocked_shell_syntax(trimmed) {
             return Err("Blocked command syntax. Chaining, pipes, redirection, and substitutions are not allowed unless 'allow any command' is enabled.".to_string());
         }
@@ -1546,7 +1789,7 @@ async fn run_project_command(
         allowed_prefixes
     };
 
-    if !stored_settings.allow_any_command && !is_command_allowed(trimmed, &allowed) {
+    if !stored_settings.allow_any_command && !full_access_mode && !is_command_allowed(trimmed, &allowed) {
         let token = first_command_token(trimmed);
         return Err(format!(
             "Command is blocked by allowlist. Add prefix `{}` in Settings -> Allowed command prefixes.",
@@ -1782,6 +2025,60 @@ fn locate_ollama_binary() -> Option<PathBuf> {
     }
 }
 
+fn candidate_codex_paths() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = env::var("CODEX_PATH") {
+        candidates.push(PathBuf::from(path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/codex"));
+        candidates.push(PathBuf::from("/usr/local/bin/codex"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("Codex")
+                    .join("codex.exe"),
+            );
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        candidates.push(PathBuf::from("/usr/local/bin/codex"));
+        candidates.push(PathBuf::from("/usr/bin/codex"));
+    }
+
+    candidates
+}
+
+fn locate_codex_binary() -> Option<PathBuf> {
+    for path in candidate_codex_paths() {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    let in_path = Command::new("codex")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+
+    if in_path {
+        Some(PathBuf::from("codex"))
+    } else {
+        None
+    }
+}
+
 async fn is_ollama_reachable(endpoint: &str) -> bool {
     let client = match Client::builder()
         .connect_timeout(Duration::from_secs(2))
@@ -1829,6 +2126,27 @@ async fn ollama_status(endpoint: String) -> Result<OllamaStatus, String> {
 }
 
 #[tauri::command]
+fn codex_status() -> Result<CodexStatus, String> {
+    let detected_path = locate_codex_binary();
+    let installed = detected_path.is_some();
+    let rendered_path = detected_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+
+    let message = if installed {
+        "Codex CLI is available.".to_string()
+    } else {
+        "Codex CLI is not installed.".to_string()
+    };
+
+    Ok(CodexStatus {
+        installed,
+        message,
+        detected_path: rendered_path,
+    })
+}
+
+#[tauri::command]
 fn install_ollama() -> Result<String, String> {
     let url = "https://ollama.com/download";
 
@@ -1857,6 +2175,37 @@ fn install_ollama() -> Result<String, String> {
     }
 
     Ok("Opened Ollama download page.".to_string())
+}
+
+#[tauri::command]
+fn install_codex_cli() -> Result<String, String> {
+    let url = "https://github.com/openai/codex#installation";
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|err| format!("Failed to open Codex install page: {err}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map_err(|err| format!("Failed to open Codex install page: {err}"))?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|err| format!("Failed to open Codex install page: {err}"))?;
+    }
+
+    Ok("Opened Codex CLI installation guide.".to_string())
 }
 
 #[tauri::command]
@@ -2035,6 +2384,30 @@ async fn start_ollama_chat(
                 OllamaStreamEvent {
                     request_id,
                     delta: None,
+                    done: true,
+                    error: Some(error),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_codex_chat(
+    app: AppHandle,
+    request: CodexChatRequest,
+    request_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = stream_codex_response(app.clone(), request, request_id.clone()).await {
+            emit_codex_event(
+                &app,
+                CodexStreamEvent {
+                    request_id,
+                    delta: None,
+                    status: None,
                     done: true,
                     error: Some(error),
                 },

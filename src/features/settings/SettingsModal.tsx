@@ -159,10 +159,15 @@ export function SettingsModal({
       const selectedModel = form.modelName.trim();
       const fallbackModel = installedModelOptions[0]?.name ?? settings.modelName;
 
-      await onSave({
+      const nextSettings: AppSettings = {
         ...form,
-        modelName: selectedModel || fallbackModel
-      });
+        workingOnlyMode: true,
+        modelName: selectedModel || fallbackModel,
+        commandExecutionEnabled: form.fullAccessMode ? true : form.commandExecutionEnabled,
+        allowAnyCommand: form.fullAccessMode ? true : form.allowAnyCommand
+      };
+
+      await onSave(nextSettings);
       onClose();
     } finally {
       setSaving(false);
@@ -241,6 +246,74 @@ export function SettingsModal({
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="text-sm text-ink">
+            Model label shown in toolbar (optional)
+            <input
+              value={form.displayModelLabel}
+              onChange={(event) => updateForm("displayModelLabel", event.target.value)}
+              className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
+              placeholder="Example: qwen3-coder-next:q8_0"
+            />
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.agenticMode}
+              onChange={(event) => updateForm("agenticMode", event.target.checked)}
+            />
+            Agentic mode (detect build requests and generate executable project file plans)
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.autoApplyFilePlans}
+              onChange={(event) => updateForm("autoApplyFilePlans", event.target.checked)}
+              disabled={!form.agenticMode}
+            />
+            Auto-apply AI file plans for chat build requests (use with caution)
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.autoApproveActions}
+              onChange={(event) => updateForm("autoApproveActions", event.target.checked)}
+            />
+            Auto-approve AI suggestions (commands, edits, and file plans)
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.autonomousAgentEnabled}
+              onChange={(event) => updateForm("autonomousAgentEnabled", event.target.checked)}
+            />
+            Autonomous agent mode (AI can inspect files, run commands, and continue steps automatically)
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.fullAccessMode}
+              onChange={(event) => updateForm("fullAccessMode", event.target.checked)}
+            />
+            Full access mode (remove command safety limits and allow unrestricted step execution)
+          </label>
+
+          <label className="text-sm text-ink">
+            Autonomous max steps
+            <input
+              type="number"
+              min={2}
+              max={20}
+              value={form.maxAgentSteps}
+              onChange={(event) => updateForm("maxAgentSteps", Number(event.target.value))}
+              className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
+            />
+          </label>
+
+          <label className="text-sm text-ink">
             Model to use (installed only)
             <select
               value={modelSelectValue}
@@ -248,7 +321,9 @@ export function SettingsModal({
               className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
             >
               <option value="" disabled>
-                {installedModelOptions.length > 0 ? "Select installed model" : "No installed models yet"}
+                {installedModelOptions.length > 0
+                  ? "Select installed model"
+                  : "No installed models yet"}
               </option>
               {installedModelOptions.map((model) => (
                 <option key={model.name} value={model.name}>
@@ -282,8 +357,8 @@ export function SettingsModal({
             </div>
 
             <p className="mb-3 text-xs text-ink/70">
-              Search the Ollama model registry, download models in-app, and use installed models
-              directly.
+              Search the Ollama model registry, download models in-app, and use installed
+              models directly.
             </p>
 
             {!ollamaStatus?.installed && (
@@ -326,7 +401,11 @@ export function SettingsModal({
             />
 
             <div className="mb-2 flex items-center gap-2 text-[11px] text-ink/60">
-              {searchingCatalog ? <span>Searching registry...</span> : <span>Registry search ready.</span>}
+              {searchingCatalog ? (
+                <span>Searching registry...</span>
+              ) : (
+                <span>Registry search ready.</span>
+              )}
               {catalogError && <span className="text-danger">{catalogError}</span>}
             </div>
 

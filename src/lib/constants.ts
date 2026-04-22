@@ -70,6 +70,14 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
 
 export const DEFAULT_SETTINGS: AppSettings = {
   modelName: "qwen2.5-coder:7b",
+  displayModelLabel: "",
+  agenticMode: true,
+  autoApplyFilePlans: false,
+  autoApproveActions: false,
+  workingOnlyMode: true,
+  autonomousAgentEnabled: true,
+  fullAccessMode: true,
+  maxAgentSteps: 8,
   ollamaEndpoint: import.meta.env.VITE_DEFAULT_OLLAMA_URL ?? "http://127.0.0.1:11434",
   temperature: 0.2,
   maxTokens: 2048,

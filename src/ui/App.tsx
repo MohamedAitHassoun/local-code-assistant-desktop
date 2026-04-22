@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { ChatPanel } from "@/features/chat/ChatPanel";
@@ -50,6 +50,7 @@ export default function App() {
   const [appError, setAppError] = useState<string | null>(null);
   const [runningCommand, setRunningCommand] = useState(false);
   const [applyingFilePlan, setApplyingFilePlan] = useState(false);
+  const autoAppliedPlanIdsRef = useRef<Set<string>>(new Set());
 
   const settings = useSettingsStore((state) => state.settings);
   const replaceSettings = useSettingsStore((state) => state.replaceSettings);
@@ -176,7 +177,8 @@ export default function App() {
       let endpoint = settings.ollamaEndpoint;
       try {
         const loaded = await loadSettings();
-        replaceSettings(loaded);
+        const normalizedLoaded = { ...loaded };
+        replaceSettings(normalizedLoaded);
         endpoint = loaded.ollamaEndpoint;
       } catch {
         // Use defaults if this is first app run.
@@ -454,10 +456,38 @@ export default function App() {
   };
 
   const handleSaveSettings = async (nextSettings: typeof settings) => {
-    await saveSettings(nextSettings);
-    updateSettings(nextSettings);
-    await refreshOllama(nextSettings.ollamaEndpoint);
+    const normalizedSettings = {
+      ...nextSettings,
+      workingOnlyMode: true
+    };
+
+    await saveSettings(normalizedSettings);
+    updateSettings(normalizedSettings);
+    await refreshOllama(normalizedSettings.ollamaEndpoint);
   };
+
+  const persistSettingsPatch = (patch: Partial<typeof settings>) => {
+    const next = {
+      ...settings,
+      ...patch,
+      workingOnlyMode: true
+    };
+    updateSettings(next);
+    void saveSettings(next);
+  };
+
+  const handleToggleAutoApprove = () => {
+    persistSettingsPatch({ autoApproveActions: !settings.autoApproveActions });
+  };
+
+  const activeModelLabel = useMemo(() => {
+    const customLabel = settings.displayModelLabel.trim();
+    if (customLabel) {
+      return customLabel;
+    }
+
+    return settings.modelName;
+  }, [settings.displayModelLabel, settings.modelName]);
 
   const persistLocalMessage = (message: ChatMessage) => {
     appendMessage(message);
@@ -547,14 +577,19 @@ export default function App() {
     }
 
     const plan = pendingFilePlan;
+    const compactWorkingLog = Boolean(plan.autoApply);
     setApplyingFilePlan(true);
 
     const commandStartMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "system",
-      content: `Applying approved file plan (${plan.operations.length} operation${
-        plan.operations.length === 1 ? "" : "s"
-      }).`,
+      content: compactWorkingLog
+        ? "Applying generated changes..."
+        : `Applying approved file plan (${plan.operations.length} operation${
+            plan.operations.length === 1 ? "" : "s"
+          }):\n${plan.operations
+            .map((operation, index) => `${index + 1}. ${operation.action.toUpperCase()} ${operation.relativePath}`)
+            .join("\n")}`,
       createdAt: buildTimestamp(),
       projectPath: rootPath,
       metadata: { intent: "apply_file_plan" }
@@ -606,9 +641,16 @@ export default function App() {
       const outputMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content:
-          appliedPaths.length > 0
-            ? `Applied file changes:\n${appliedPaths.map((path) => `- ${path}`).join("\n")}`
+        content: compactWorkingLog
+          ? appliedPaths.length > 0
+            ? `Done. Applied ${appliedPaths.length} change${
+                appliedPaths.length === 1 ? "" : "s"
+              }.`
+            : "Done. No file changes were applied."
+          : appliedPaths.length > 0
+            ? `Applied file changes:\n${appliedPaths
+                .map((path, index) => `${index + 1}. ${path}`)
+                .join("\n")}`
             : "No file changes were applied.",
         createdAt: buildTimestamp(),
         projectPath: rootPath,
@@ -656,6 +698,63 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (!pendingFilePlan) {
+      return;
+    }
+
+    if (!(pendingFilePlan.autoApply || settings.autoApproveActions)) {
+      return;
+    }
+
+    if (applyingFilePlan) {
+      return;
+    }
+
+    if (autoAppliedPlanIdsRef.current.has(pendingFilePlan.id)) {
+      return;
+    }
+
+    autoAppliedPlanIdsRef.current.add(pendingFilePlan.id);
+
+    const autoApplyMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "system",
+      content:
+        pendingFilePlan.autoApply
+          ? "Thinking complete. Applying changes..."
+          : `Auto-applying generated file plan (${pendingFilePlan.operations.length} operation${
+              pendingFilePlan.operations.length === 1 ? "" : "s"
+            })...`,
+      createdAt: buildTimestamp(),
+      projectPath: rootPath ?? undefined,
+      metadata: { intent: "apply_file_plan" }
+    };
+    persistLocalMessage(autoApplyMessage);
+
+    void handleApproveFilePlan();
+  }, [applyingFilePlan, pendingFilePlan, rootPath, settings.autoApproveActions]);
+
+  useEffect(() => {
+    if (!settings.autoApproveActions || !pendingCommand || runningCommand) {
+      return;
+    }
+
+    void handleApproveCommand();
+  }, [pendingCommand, runningCommand, settings.autoApproveActions]);
+
+  useEffect(() => {
+    if (!pendingEdit || pendingFilePlan) {
+      return;
+    }
+
+    if (!(settings.autoApproveActions || pendingEdit.autoApply)) {
+      return;
+    }
+
+    void handleAcceptEdit();
+  }, [pendingEdit, pendingFilePlan, settings.autoApproveActions]);
+
   return (
     <div className="flex h-full flex-col text-ink">
       <TopToolbar
@@ -665,7 +764,7 @@ export default function App() {
         onSummarizeFile={() => void handleSummarizeFile()}
         onSummarizeProject={() => void handleSummarizeProject()}
         onOpenSettings={() => setSettingsOpen(true)}
-        activeModel={settings.modelName}
+        activeModel={activeModelLabel}
         hasDirtyFile={Boolean(activeTab?.dirty)}
         ollamaStatus={ollamaStatus}
       />
@@ -715,11 +814,13 @@ export default function App() {
               error={error}
               onboardingMessage={onboardingMessage}
               ollamaStatus={ollamaStatus}
+              autoApproveEnabled={settings.autoApproveActions}
               onSend={handleSendChat}
               onClearHistory={handleClearHistory}
               onInstallOllama={handleInstallOllama}
               onStartOllama={handleStartOllama}
               onRefreshOllama={handleRefreshOllama}
+              onToggleAutoApprove={handleToggleAutoApprove}
             />
           </Panel>
         </PanelGroup>

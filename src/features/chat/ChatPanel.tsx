@@ -8,11 +8,13 @@ interface ChatPanelProps {
   error: string | null;
   onboardingMessage: string | null;
   ollamaStatus: OllamaStatus | null;
+  autoApproveEnabled: boolean;
   onSend: (prompt: string) => Promise<void>;
   onClearHistory: () => Promise<void>;
   onInstallOllama: () => Promise<void>;
   onStartOllama: () => Promise<void>;
   onRefreshOllama: () => Promise<void>;
+  onToggleAutoApprove: () => void;
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
@@ -42,11 +44,13 @@ export function ChatPanel({
   error,
   onboardingMessage,
   ollamaStatus,
+  autoApproveEnabled,
   onSend,
   onClearHistory,
   onInstallOllama,
   onStartOllama,
-  onRefreshOllama
+  onRefreshOllama,
+  onToggleAutoApprove
 }: ChatPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [actionBusy, setActionBusy] = useState<null | "install" | "start" | "refresh">(null);
@@ -88,13 +92,27 @@ export function ChatPanel({
     <aside className="flex h-full min-h-0 flex-col border-l border-border bg-panel/95">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-ink/70">AI Assistant</h2>
-        <button
-          type="button"
-          onClick={() => void onClearHistory()}
-          className="rounded border border-border bg-white px-2 py-1 text-xs text-ink hover:bg-slate-100"
-        >
-          Clear
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onToggleAutoApprove}
+            className={cn(
+              "rounded border px-2 py-1 text-[11px]",
+              autoApproveEnabled
+                ? "border-success/40 bg-emerald-50 text-success hover:bg-emerald-100"
+                : "border-border bg-white text-ink hover:bg-slate-100"
+            )}
+          >
+            Auto approve {autoApproveEnabled ? "ON" : "OFF"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void onClearHistory()}
+            className="rounded border border-border bg-white px-2 py-1 text-xs text-ink hover:bg-slate-100"
+          >
+            Clear
+          </button>
+        </div>
       </div>
 
       {onboardingMessage && (
@@ -155,6 +173,11 @@ export function ChatPanel({
       </div>
 
       <div className="border-t border-border p-3">
+        {loading && (
+          <div className="mb-2 rounded border border-accent/20 bg-accentSoft px-3 py-2 text-xs text-accent">
+            AI is still working on your request...
+          </div>
+        )}
         <textarea
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
@@ -164,18 +187,25 @@ export function ChatPanel({
               void handleSubmit();
             }
           }}
-          placeholder="Ask a programming question... (Enter to send, Shift+Enter for new line)"
-          className="h-28 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink/50 focus:ring"
+          disabled={loading}
+          placeholder={
+            loading
+              ? "AI is working... please wait until it finishes."
+              : "Ask a programming question... (Enter to send, Shift+Enter for new line)"
+          }
+          className="h-28 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink/50 focus:ring disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-ink/60"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-ink/50">Everything stays local by default.</span>
+          <span className="text-xs text-ink/50">
+            {loading ? "Please wait until the current task is finished." : "Everything stays local by default."}
+          </span>
           <button
             type="button"
             onClick={() => void handleSubmit()}
             disabled={loading || !prompt.trim()}
             className="rounded border border-accent bg-accent px-3 py-1.5 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Thinking..." : "Send"}
+            {loading ? "Working..." : "Send"}
           </button>
         </div>
       </div>
