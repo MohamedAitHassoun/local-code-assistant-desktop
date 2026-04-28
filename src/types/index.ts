@@ -1,8 +1,12 @@
 export type ChatRole = "system" | "user" | "assistant";
 
 export interface AppSettings {
+  aiProvider: "ollama" | "openrouter";
   modelName: string;
   displayModelLabel: string;
+  openrouterApiKey: string;
+  openrouterModel: string;
+  openrouterEndpoint: string;
   agenticMode: boolean;
   autoApplyFilePlans: boolean;
   autoApproveActions: boolean;
@@ -198,6 +202,23 @@ export interface OllamaChatRequest {
   temperature: number;
   maxTokens: number;
   images?: string[];
+}
+
+export interface OpenRouterChatRequest {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface OpenRouterStreamEvent {
+  requestId: string;
+  delta?: string;
+  done: boolean;
+  error?: string;
 }
 
 export interface RecentProject {

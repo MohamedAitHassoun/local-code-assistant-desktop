@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { ChatPanel } from "@/features/chat/ChatPanel";
@@ -13,10 +13,7 @@ import { applyFileOperations, readTextFile, saveTextFile, scanProject } from "@/
 import {
   checkOllamaStatus,
   installOllama,
-  listOllamaModels,
-  searchOllamaModels,
-  startOllama,
-  streamOllamaPull
+  startOllama
 } from "@/services/ollama/client";
 import { runProjectCommand } from "@/services/terminal/commands";
 import {
@@ -34,10 +31,13 @@ import { useEditorStore } from "@/stores/editorStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { TopToolbar } from "./layout/TopToolbar";
+import {
+  EMBEDDED_OPENROUTER_API_KEY,
+  FIXED_OPENROUTER_MODEL,
+  normalizeLockedAiSettings
+} from "@/lib/constants";
 import type {
   ChatMessage,
-  OllamaModel,
-  OllamaPullStreamEvent,
   OllamaStatus,
   RecentProject
 } from "@/types";
@@ -45,7 +45,6 @@ import type {
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
-  const [models, setModels] = useState<OllamaModel[]>([]);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [appError, setAppError] = useState<string | null>(null);
   const [runningCommand, setRunningCommand] = useState(false);
@@ -150,13 +149,6 @@ export default function App() {
       const status = await checkOllamaStatus(endpoint);
       setOllamaStatus(status);
       setAppError(null);
-
-      if (status.running) {
-        const list = await listOllamaModels(endpoint);
-        setModels(list);
-      } else {
-        setModels([]);
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to check Ollama status.";
       setAppError(message);
@@ -175,17 +167,21 @@ export default function App() {
   useEffect(() => {
     const initialize = async () => {
       let endpoint = settings.ollamaEndpoint;
+      let provider: typeof settings.aiProvider = settings.aiProvider;
       try {
         const loaded = await loadSettings();
-        const normalizedLoaded = { ...loaded };
+        const normalizedLoaded = normalizeLockedAiSettings({ ...loaded });
         replaceSettings(normalizedLoaded);
-        endpoint = loaded.ollamaEndpoint;
+        endpoint = normalizedLoaded.ollamaEndpoint;
+        provider = normalizedLoaded.aiProvider;
       } catch {
         // Use defaults if this is first app run.
       }
 
       await reloadRecentProjects();
-      await refreshOllama(endpoint);
+      if (provider === "ollama") {
+        await refreshOllama(endpoint);
+      }
 
       try {
         const history = await loadChatHistory();
@@ -204,8 +200,10 @@ export default function App() {
   }, [settings.theme]);
 
   useEffect(() => {
-    void refreshOllama(settings.ollamaEndpoint);
-  }, [settings.ollamaEndpoint]);
+    if (settings.aiProvider === "ollama") {
+      void refreshOllama(settings.ollamaEndpoint);
+    }
+  }, [settings.aiProvider, settings.ollamaEndpoint]);
 
   useEffect(() => {
     const loadProjectHistory = async () => {
@@ -379,6 +377,18 @@ export default function App() {
   };
 
   const onboardingMessage = useMemo(() => {
+    if (settings.aiProvider === "openrouter") {
+      if (!settings.openrouterApiKey.trim()) {
+        if (EMBEDDED_OPENROUTER_API_KEY) {
+          return "OpenRouter key is configured but currently unavailable. Restart the app.";
+        }
+
+        return "This build is missing an embedded OpenRouter API key. Set VITE_OPENROUTER_API_KEY before building.";
+      }
+
+      return null;
+    }
+
     if (!ollamaStatus) {
       return null;
     }
@@ -392,7 +402,11 @@ export default function App() {
     }
 
     return null;
-  }, [ollamaStatus]);
+  }, [
+    ollamaStatus,
+    settings.aiProvider,
+    settings.openrouterApiKey
+  ]);
 
   const handleClearHistory = async () => {
     await clearChatHistory(rootPath ?? undefined);
@@ -429,49 +443,25 @@ export default function App() {
     await refreshOllama(settings.ollamaEndpoint);
   };
 
-  const handleRefreshModels = async (endpoint: string) => {
-    await refreshOllama(endpoint);
-  };
-
-  const handleSearchModels = useCallback(async (query: string) => {
-    return searchOllamaModels(query, 120);
-  }, []);
-
-  const handlePullModel = async (
-    endpoint: string,
-    modelName: string,
-    onProgress: (event: OllamaPullStreamEvent) => void
-  ) => {
-    const status = await checkOllamaStatus(endpoint);
-    if (!status.installed) {
-      throw new Error("Ollama is not installed. Install it first, then download models.");
-    }
-
-    if (!status.running) {
-      await startOllama(endpoint);
-    }
-
-    await streamOllamaPull(endpoint, modelName, onProgress);
-    await refreshOllama(endpoint);
-  };
-
   const handleSaveSettings = async (nextSettings: typeof settings) => {
-    const normalizedSettings = {
+    const normalizedSettings = normalizeLockedAiSettings({
       ...nextSettings,
       workingOnlyMode: true
-    };
+    });
 
     await saveSettings(normalizedSettings);
     updateSettings(normalizedSettings);
-    await refreshOllama(normalizedSettings.ollamaEndpoint);
+    if (normalizedSettings.aiProvider === "ollama") {
+      await refreshOllama(normalizedSettings.ollamaEndpoint);
+    }
   };
 
   const persistSettingsPatch = (patch: Partial<typeof settings>) => {
-    const next = {
+    const next = normalizeLockedAiSettings({
       ...settings,
       ...patch,
       workingOnlyMode: true
-    };
+    });
     updateSettings(next);
     void saveSettings(next);
   };
@@ -486,8 +476,8 @@ export default function App() {
       return customLabel;
     }
 
-    return settings.modelName;
-  }, [settings.displayModelLabel, settings.modelName]);
+    return FIXED_OPENROUTER_MODEL;
+  }, [settings.displayModelLabel]);
 
   const persistLocalMessage = (message: ChatMessage) => {
     appendMessage(message);
@@ -766,6 +756,8 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         activeModel={activeModelLabel}
         hasDirtyFile={Boolean(activeTab?.dirty)}
+        aiProvider={settings.aiProvider}
+        openrouterConfigured={Boolean(settings.openrouterApiKey.trim())}
         ollamaStatus={ollamaStatus}
       />
 
@@ -813,6 +805,7 @@ export default function App() {
               loading={loading}
               error={error}
               onboardingMessage={onboardingMessage}
+              aiProvider={settings.aiProvider}
               ollamaStatus={ollamaStatus}
               autoApproveEnabled={settings.autoApproveActions}
               onSend={handleSendChat}
@@ -829,14 +822,9 @@ export default function App() {
       <SettingsModal
         open={settingsOpen}
         settings={settings}
-        models={models}
-        ollamaStatus={ollamaStatus}
         onClose={() => setSettingsOpen(false)}
         onSave={handleSaveSettings}
         onClearHistory={handleClearHistory}
-        onRefreshModels={handleRefreshModels}
-        onSearchModels={handleSearchModels}
-        onPullModel={handlePullModel}
       />
 
       {pendingEdit && !pendingFilePlan && (

@@ -68,16 +68,39 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "gradle test"
 ];
 
-export const DEFAULT_SETTINGS: AppSettings = {
-  modelName: "qwen2.5-coder:7b",
+export const FIXED_AI_PROVIDER: AppSettings["aiProvider"] = "openrouter";
+export const FIXED_OPENROUTER_MODEL = "qwen/qwen3.5-9b";
+export const FIXED_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+export const EMBEDDED_OPENROUTER_API_KEY = (import.meta.env.VITE_OPENROUTER_API_KEY ?? "").trim();
+
+export function normalizeLockedAiSettings(settings: AppSettings): AppSettings {
+  const embeddedKey = EMBEDDED_OPENROUTER_API_KEY;
+  const resolvedApiKey = embeddedKey || settings.openrouterApiKey.trim();
+
+  return {
+    ...settings,
+    aiProvider: FIXED_AI_PROVIDER,
+    modelName: FIXED_OPENROUTER_MODEL,
+    openrouterModel: FIXED_OPENROUTER_MODEL,
+    openrouterEndpoint: FIXED_OPENROUTER_ENDPOINT,
+    openrouterApiKey: resolvedApiKey
+  };
+}
+
+const BASE_DEFAULT_SETTINGS: AppSettings = {
+  aiProvider: "openrouter",
+  modelName: "qwen/qwen3.5-9b",
   displayModelLabel: "",
+  openrouterApiKey: EMBEDDED_OPENROUTER_API_KEY,
+  openrouterModel: FIXED_OPENROUTER_MODEL,
+  openrouterEndpoint: FIXED_OPENROUTER_ENDPOINT,
   agenticMode: true,
   autoApplyFilePlans: false,
   autoApproveActions: false,
   workingOnlyMode: true,
   autonomousAgentEnabled: true,
   fullAccessMode: true,
-  maxAgentSteps: 8,
+  maxAgentSteps: 20,
   ollamaEndpoint: import.meta.env.VITE_DEFAULT_OLLAMA_URL ?? "http://127.0.0.1:11434",
   temperature: 0.2,
   maxTokens: 2048,
@@ -91,6 +114,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   allowAnyCommand: false,
   allowedCommandPrefixes: DEFAULT_ALLOWED_COMMAND_PREFIXES
 };
+
+export const DEFAULT_SETTINGS: AppSettings = normalizeLockedAiSettings(BASE_DEFAULT_SETTINGS);
 
 export const MAX_READABLE_FILE_BYTES = 1_500_000;
 export const CHUNK_SIZE_CHARS = 1800;

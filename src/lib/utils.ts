@@ -37,13 +37,105 @@ export function parseFirstShellCommandBlock(input: string): string | null {
     return null;
   }
 
-  const script = match[1]
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("#"))
-    .join("\n")
-    .trim();
+  const runtimeOs = (() => {
+    if (typeof navigator === "undefined") {
+      return "unknown";
+    }
 
-  return script.length > 0 ? script : null;
+    const hint = `${navigator.userAgent} ${navigator.platform}`.toLowerCase();
+    if (hint.includes("mac")) return "macos";
+    if (hint.includes("win")) return "windows";
+    if (hint.includes("linux")) return "linux";
+    return "unknown";
+  })();
+
+  const stripInlineComment = (line: string): string => {
+    const hashIndex = line.indexOf("#");
+    if (hashIndex === -1) {
+      return line.trim();
+    }
+
+    const before = line.slice(0, hashIndex).trim();
+    return before;
+  };
+
+  const lines = match[1]
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#"));
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const sanitizedCandidates = lines
+    .map((line) => ({
+      raw: line,
+      sanitized: stripInlineComment(line)
+    }))
+    .filter((item) => item.sanitized.length > 0);
+
+  if (sanitizedCandidates.length === 0) {
+    return null;
+  }
+
+  const normalizePythonCommand = (command: string): string => {
+    if (runtimeOs === "windows") {
+      return command;
+    }
+
+    return command
+      .replace(/(^|&&\s*|;\s*)python\b/g, "$1python3")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  if (sanitizedCandidates.length === 1) {
+    return normalizePythonCommand(sanitizedCandidates[0].sanitized);
+  }
+
+  const scoreCandidate = (raw: string, sanitized: string): number => {
+    const normalizedRaw = raw.toLowerCase();
+    const normalizedCommand = sanitized.toLowerCase();
+    let score = 0;
+
+    if (runtimeOs === "macos") {
+      if (normalizedCommand.startsWith("open ")) score += 10;
+      if (normalizedRaw.includes("mac")) score += 3;
+      if (normalizedCommand.startsWith("xdg-open ") || normalizedCommand.startsWith("start ")) {
+        score -= 5;
+      }
+    } else if (runtimeOs === "linux") {
+      if (normalizedCommand.startsWith("xdg-open ")) score += 10;
+      if (normalizedRaw.includes("linux")) score += 3;
+      if (normalizedCommand.startsWith("open ") || normalizedCommand.startsWith("start ")) {
+        score -= 5;
+      }
+    } else if (runtimeOs === "windows") {
+      if (normalizedCommand.startsWith("start ") || normalizedCommand.startsWith("explorer ")) {
+        score += 10;
+      }
+      if (normalizedRaw.includes("windows")) score += 3;
+      if (normalizedCommand.startsWith("open ") || normalizedCommand.startsWith("xdg-open ")) {
+        score -= 5;
+      }
+    }
+
+    return score;
+  };
+
+  let best = sanitizedCandidates[0];
+  let bestScore = scoreCandidate(best.raw, best.sanitized);
+  for (const candidate of sanitizedCandidates.slice(1)) {
+    const score = scoreCandidate(candidate.raw, candidate.sanitized);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return normalizePythonCommand(best.sanitized);
 }
 
 export interface ParsedFileOperationDraft {

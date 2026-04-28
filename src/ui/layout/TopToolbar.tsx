@@ -10,14 +10,36 @@ interface TopToolbarProps {
   onOpenSettings: () => void;
   activeModel: string;
   hasDirtyFile: boolean;
+  aiProvider: "ollama" | "openrouter";
+  openrouterConfigured: boolean;
   ollamaStatus: OllamaStatus | null;
 }
 
 function StatusChip({
+  aiProvider,
+  openrouterConfigured,
   ollamaStatus
 }: {
+  aiProvider: "ollama" | "openrouter";
+  openrouterConfigured: boolean;
   ollamaStatus: OllamaStatus | null;
 }) {
+  if (aiProvider === "openrouter") {
+    if (!openrouterConfigured) {
+      return (
+        <span className="rounded-full border border-warning/40 bg-amber-50 px-3 py-1 text-xs text-warning">
+          OpenRouter not configured
+        </span>
+      );
+    }
+
+    return (
+      <span className="rounded-full border border-success/40 bg-emerald-50 px-3 py-1 text-xs text-success">
+        OpenRouter ready
+      </span>
+    );
+  }
+
   if (!ollamaStatus) {
     return (
       <span className="rounded-full border border-border/80 bg-white/70 px-3 py-1 text-xs text-ink/70">
@@ -86,6 +108,8 @@ export function TopToolbar({
   onOpenSettings,
   activeModel,
   hasDirtyFile,
+  aiProvider,
+  openrouterConfigured,
   ollamaStatus
 }: TopToolbarProps) {
   return (
@@ -105,7 +129,11 @@ export function TopToolbar({
         <span className="rounded-full border border-accent/30 bg-accentSoft px-3 py-1 text-xs text-accent">
           {activeModel}
         </span>
-        <StatusChip ollamaStatus={ollamaStatus} />
+        <StatusChip
+          aiProvider={aiProvider}
+          openrouterConfigured={openrouterConfigured}
+          ollamaStatus={ollamaStatus}
+        />
         <ToolbarButton label="Settings" onClick={onOpenSettings} />
       </div>
     </header>

@@ -9,7 +9,12 @@ import {
 } from "@/lib/utils";
 import { replaceSelectionInText } from "@/lib/editor";
 import { applyFileOperations, readContextFile, scanProject } from "@/services/fileSystem";
-import { streamOllamaChat } from "@/services/ollama/client";
+import { streamOpenRouterChat } from "@/services/openrouter/client";
+import {
+  EMBEDDED_OPENROUTER_API_KEY,
+  FIXED_OPENROUTER_ENDPOINT,
+  FIXED_OPENROUTER_MODEL
+} from "@/lib/constants";
 import { chooseTopFilesForContext } from "@/services/project/analysis";
 import { systemPromptForIntent, userPromptForIntent } from "@/services/prompts/templates";
 import { appendChatMessage } from "@/services/storage/commands";
@@ -33,17 +38,12 @@ interface SendAssistantArgs {
 async function hydrateContextFiles(
   paths: string[],
   allowedRoot?: string
-): Promise<{ files: ContextFile[]; images: string[] }> {
+): Promise<ContextFile[]> {
   const files: ContextFile[] = [];
-  const images: string[] = [];
 
   for (const path of paths) {
     try {
       const file = await readContextFile(path, allowedRoot);
-
-      if (file.mediaType === "image" && file.imageBase64) {
-        images.push(file.imageBase64);
-      }
 
       files.push({
         path: file.path,
@@ -56,7 +56,7 @@ async function hydrateContextFiles(
     }
   }
 
-  return { files, images };
+  return files;
 }
 
 function looksLikeExecutionRequest(prompt: string): boolean {
@@ -72,6 +72,29 @@ function looksLikeExecutionRequest(prompt: string): boolean {
     "develop",
     "make",
     "add",
+    "improve",
+    "update",
+    "modify",
+    "change",
+    "edit",
+    "redesign",
+    "restyle",
+    "style",
+    "modern",
+    "professional",
+    "polish",
+    "enhance",
+    "beautify",
+    "remove",
+    "delete",
+    "replace",
+    "open",
+    "run",
+    "launch",
+    "start",
+    "show",
+    "preview",
+    "in browser",
     "in this folder",
     "in this project",
     "in the opened folder",
@@ -137,12 +160,129 @@ type AgentDecision =
       reason?: string;
     };
 
+const FOLLOW_UP_EXACT_PATTERNS = [
+  /^do that[.!?]*$/i,
+  /^do this[.!?]*$/i,
+  /^do it[.!?]*$/i,
+  /^run it[.!?]*$/i,
+  /^apply it[.!?]*$/i,
+  /^continue[.!?]*$/i,
+  /^proceed[.!?]*$/i,
+  /^go ahead[.!?]*$/i
+];
+
+function truncateForFollowUpContext(input: string, maxChars: number): string {
+  if (input.length <= maxChars) {
+    return input;
+  }
+
+  return `${input.slice(0, maxChars)}...`;
+}
+
+function isLikelyFollowUpPrompt(prompt: string): boolean {
+  const normalized = prompt.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (FOLLOW_UP_EXACT_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  const compact = normalized.toLowerCase();
+  const short = compact.split(/\s+/).filter(Boolean).length <= 4;
+  if (!short) {
+    return false;
+  }
+
+  return [
+    "do that",
+    "do this",
+    "do it",
+    "run it",
+    "apply it",
+    "continue",
+    "proceed",
+    "go ahead",
+    "same"
+  ].some((hint) => compact.includes(hint));
+}
+
+function isActionableAssistantContent(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    normalized === "request completed." ||
+    normalized === "done. request completed." ||
+    normalized === "request processing finished."
+  ) {
+    return false;
+  }
+
+  return normalized.length >= 80 || normalized.includes("next step") || normalized.includes("```");
+}
+
+function resolvePromptWithRecentContext(prompt: string, messages: ChatMessage[]): string {
+  if (!isLikelyFollowUpPrompt(prompt)) {
+    return prompt;
+  }
+
+  const assistantReference = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && isActionableAssistantContent(message.content));
+  const userReference = [...messages]
+    .reverse()
+    .find((message) => message.role === "user" && message.content.trim().length > 0);
+
+  if (!assistantReference && !userReference) {
+    return prompt;
+  }
+
+  const parts: string[] = [`Follow-up request: ${prompt.trim()}`];
+  if (userReference) {
+    parts.push(
+      `Previous user task:\n${truncateForFollowUpContext(userReference.content.trim(), 900)}`
+    );
+  }
+  if (assistantReference) {
+    parts.push(
+      `Previous assistant context:\n${truncateForFollowUpContext(
+        assistantReference.content.trim(),
+        1400
+      )}`
+    );
+  }
+  parts.push(
+    "Interpret the follow-up as a request to continue/execute that prior task now, then provide progress and result."
+  );
+
+  return parts.join("\n\n");
+}
+
 function normalizeAgentAction(action: unknown): string {
   if (typeof action !== "string") {
     return "";
   }
 
   return action.trim().toLowerCase();
+}
+
+function sanitizeSingleCommandForExecution(input: string): string {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#"));
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  const parsed = parseFirstShellCommandBlock(`\`\`\`bash\n${lines.join("\n")}\n\`\`\``);
+  return (parsed ?? lines[0]).trim();
 }
 
 function parseJsonFromAssistant(input: string): Record<string, unknown> | null {
@@ -454,6 +594,7 @@ function resolvePathHintInProject(pathHint: string, rootPath: string, indexedPat
 
 export function useAssistant() {
   const settings = useSettingsStore((state) => state.settings);
+  const messages = useChatStore((state) => state.messages);
   const {
     appendMessage,
     appendMessageContent,
@@ -515,6 +656,7 @@ export function useAssistant() {
       const activeTab = tabs.find((tab) => tab.path === activePath);
       const includeCurrentFile = settings.includeCurrentFile && Boolean(activeTab);
       const includeSelection = settings.includeSelection && Boolean(selection?.text?.trim());
+      const resolvedPrompt = resolvePromptWithRecentContext(prompt, messages);
 
       const fallbackContextFiles =
         selectedContextFiles.length > 0
@@ -526,28 +668,31 @@ export function useAssistant() {
             : [];
 
       const chosenContextFiles = fallbackContextFiles.slice(0, settings.maxFilesInContext);
-      const hydratedContext = await hydrateContextFiles(chosenContextFiles, rootPath ?? undefined);
+      const hydratedContextFiles = await hydrateContextFiles(
+        chosenContextFiles,
+        rootPath ?? undefined
+      );
 
       const payload: ChatContextPayload = {
-        userPrompt: prompt,
+        userPrompt: resolvedPrompt,
         intent,
         filePath: includeCurrentFile ? activeTab?.path : undefined,
         fileContent: includeCurrentFile ? activeTab?.content : undefined,
         selection: includeSelection ? selection?.text : undefined,
-        selectedFiles: hydratedContext.files,
+        selectedFiles: hydratedContextFiles,
         projectSummary: projectSummary || undefined,
         projectFileIndex: files.slice(0, 600).map((file) => file.relativePath)
       };
 
       const systemPrompt = systemPromptForIntent(intent);
       const userPrompt = userPromptForIntent(payload);
-      const executionRequest = intent === "chat" && looksLikeExecutionRequest(prompt);
+      const executionRequest = intent === "chat" && looksLikeExecutionRequest(resolvedPrompt);
       const hideAssistantWhileWorking = executionRequest;
       const autonomousMode =
         settings.autonomousAgentEnabled &&
         intent === "chat" &&
         Boolean(rootPath) &&
-        shouldUseAutonomousForPrompt(prompt);
+        shouldUseAutonomousForPrompt(resolvedPrompt);
       suppressSystemEvents = autonomousMode || hideAssistantWhileWorking;
 
       const callModel = async (
@@ -555,15 +700,22 @@ export function useAssistant() {
         modelUserPrompt: string,
         streamToMessage: boolean
       ): Promise<string> => {
-        return streamOllamaChat(
+        const runtimeKey = EMBEDDED_OPENROUTER_API_KEY || settings.openrouterApiKey.trim();
+        if (!runtimeKey) {
+          throw new Error(
+            "OpenRouter API key is missing in this build. Set VITE_OPENROUTER_API_KEY and rebuild."
+          );
+        }
+
+        return streamOpenRouterChat(
           {
-            endpoint: settings.ollamaEndpoint,
-            model: settings.modelName,
+            endpoint: FIXED_OPENROUTER_ENDPOINT,
+            apiKey: runtimeKey,
+            model: FIXED_OPENROUTER_MODEL,
             systemPrompt: modelSystemPrompt,
             userPrompt: modelUserPrompt,
             temperature: settings.temperature,
-            maxTokens: settings.maxTokens,
-            images: hydratedContext.images
+            maxTokens: settings.maxTokens
           },
           (delta) => {
             if (streamToMessage && !hideAssistantWhileWorking) {
@@ -592,7 +744,7 @@ export function useAssistant() {
             : "Project files list is currently empty."
         ];
 
-        const mentionedFile = prompt.match(
+        const mentionedFile = resolvedPrompt.match(
           /\b[\w.-]+\.(py|js|ts|tsx|jsx|java|cpp|cc|cxx|c|h|hpp|json|html|css|md|txt)\b/i
         );
         if (mentionedFile) {
@@ -631,15 +783,17 @@ Return ONLY JSON with one action:
 Rules:
 - Inspect files before explaining project internals.
 - If user asks about a specific file, read that file first.
-- Use one command at a time.
+- Use one command at a time (EXACTLY one command string, no newlines, no command lists).
 - For creating/updating/deleting source files, ALWAYS use apply_file_operations with full contents.
+- Keep apply_file_operations focused: prefer small batches (1-3 files per step), then continue.
 - Do NOT use run_command to write file contents (no echo/printf/cat heredoc/redirection/tee for code files).
 - Use run_command only for safe inspection/testing/opening tasks.
 - File operation paths must be relative to project root.
+- Never output OS alternatives in one command (for example do not include both open/xdg-open/start).
 - Return final only after requested work is done or if blocked with a clear reason.`;
 
           const agentUserPrompt = `User request:
-${prompt}
+${resolvedPrompt}
 
 Current observations:
 ${observations.map((item, index) => `${index + 1}. ${item}`).join("\n\n")}
@@ -721,9 +875,15 @@ Choose the next best action and return ONLY JSON.`;
           }
 
           if (decision.action === "run_command") {
-            if (isLikelyFileMutationCommand(decision.command)) {
+            const sanitizedCommand = sanitizeSingleCommandForExecution(decision.command);
+            if (!sanitizedCommand) {
+              observations.push("Rejected empty command.");
+              continue;
+            }
+
+            if (isLikelyFileMutationCommand(sanitizedCommand)) {
               observations.push(
-                `Rejected command for file mutation: ${decision.command}. Use apply_file_operations to modify files instead.`
+                `Rejected command for file mutation: ${sanitizedCommand}. Use apply_file_operations to modify files instead.`
               );
               continue;
             }
@@ -738,14 +898,14 @@ Choose the next best action and return ONLY JSON.`;
 
             try {
               const result = await runProjectCommand({
-                command: decision.command,
+                command: sanitizedCommand,
                 projectRoot: rootPath,
                 allowedPrefixes: settings.allowedCommandPrefixes,
                 timeoutSeconds: 240
               });
 
               const commandObservation = [
-                `Command: ${decision.command}`,
+                `Command: ${sanitizedCommand}`,
                 `Exit code: ${result.exitCode ?? "none"}`,
                 result.stdout ? `Stdout:\n${truncateObservation(result.stdout, 5000)}` : "",
                 result.stderr ? `Stderr:\n${truncateObservation(result.stderr, 5000)}` : ""
@@ -755,13 +915,13 @@ Choose the next best action and return ONLY JSON.`;
 
               observations.push(commandObservation);
               pushSystemEvent(
-                `Ran command (${result.exitCode ?? "none"}): ${decision.command.slice(0, 80)}`
+                `Ran command (${result.exitCode ?? "none"}): ${sanitizedCommand.slice(0, 80)}`
               );
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Command execution failed.";
-              observations.push(`Command error (${decision.command}): ${message}`);
-              pushSystemEvent(`Command failed: ${decision.command.slice(0, 80)}`);
+              observations.push(`Command error (${sanitizedCommand}): ${message}`);
+              pushSystemEvent(`Command failed: ${sanitizedCommand.slice(0, 80)}`);
             }
             continue;
           }
@@ -818,7 +978,15 @@ Choose the next best action and return ONLY JSON.`;
           }
         }
 
-        return `I reached the autonomous step limit (${maxSteps}). Ask me to continue if you want me to proceed with more steps.`;
+        const fallbackSummary = await callModel(
+          "You are a practical coding assistant. Provide a short user-facing completion summary based on observations. Do not mention internal step limits.",
+          `User request:\n${resolvedPrompt}\n\nObservations:\n${observations.join(
+            "\n\n"
+          )}\n\nReturn a concise final response for the user.`,
+          false
+        );
+
+        return fallbackSummary.trim() || "Request processing finished.";
       };
 
       let assistantContent = "";
@@ -888,7 +1056,7 @@ Choose the next best action and return ONLY JSON.`;
                   (settings.agenticMode &&
                     settings.autoApplyFilePlans &&
                     intent === "chat" &&
-                    looksLikeExecutionRequest(prompt));
+                    looksLikeExecutionRequest(resolvedPrompt));
 
                 setPendingEdit(null);
                 setPendingFilePlan({
@@ -949,22 +1117,25 @@ Choose the next best action and return ONLY JSON.`;
 
           const suggestedCommand = parseFirstShellCommandBlock(assistantContent);
           if (suggestedCommand) {
-            detectedCommand = true;
-            if (settings.commandExecutionEnabled && rootPath) {
-              setPendingCommand({
-                id: crypto.randomUUID(),
-                command: suggestedCommand,
-                reason: `Suggested command from ${intent.replace("_", " ")} response`,
-                sourceMessageId: assistantMessageId,
-                createdAt: buildTimestamp()
-              });
-              if (settings.autoApproveActions) {
-                pushSystemEvent("Prepared command and auto-approve is enabled.");
+            const sanitizedSuggestedCommand = sanitizeSingleCommandForExecution(suggestedCommand);
+            if (sanitizedSuggestedCommand) {
+              detectedCommand = true;
+              if (settings.commandExecutionEnabled && rootPath) {
+                setPendingCommand({
+                  id: crypto.randomUUID(),
+                  command: sanitizedSuggestedCommand,
+                  reason: `Suggested command from ${intent.replace("_", " ")} response`,
+                  sourceMessageId: assistantMessageId,
+                  createdAt: buildTimestamp()
+                });
+                if (settings.autoApproveActions) {
+                  pushSystemEvent("Prepared command and auto-approve is enabled.");
+                }
+              } else if (!settings.commandExecutionEnabled) {
+                setError("Command suggestion detected. Enable command execution in Settings to review and run it.");
+              } else if (!rootPath) {
+                setError("Command suggestion detected. Open a project folder before running commands.");
               }
-            } else if (!settings.commandExecutionEnabled) {
-              setError("Command suggestion detected. Enable command execution in Settings to review and run it.");
-            } else if (!rootPath) {
-              setError("Command suggestion detected. Open a project folder before running commands.");
             }
           }
         }
@@ -978,9 +1149,7 @@ Choose the next best action and return ONLY JSON.`;
           hasFileOperationDrafts || autoApplySingleEdit || (detectedCommand && settings.autoApproveActions);
 
         const displayAssistantContent = autonomousMode
-          ? cleanedAutonomousContent
-            ? `Done. Request completed.\n\n${cleanedAutonomousContent}`
-            : "Done. Request completed."
+          ? cleanedAutonomousContent || "Request completed."
           : hideAssistantWhileWorking
             ? hasAutoActionFollowup
               ? "Done. I prepared/executed the requested actions."
@@ -1027,7 +1196,8 @@ Choose the next best action and return ONLY JSON.`;
       setProject,
       settings,
       tabs,
-      updateMessageContent
+      updateMessageContent,
+      messages
     ]
   );
 

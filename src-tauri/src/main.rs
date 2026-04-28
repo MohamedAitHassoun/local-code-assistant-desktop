@@ -34,8 +34,12 @@ struct AppState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct AppSettings {
+    ai_provider: String,
     model_name: String,
     display_model_label: String,
+    openrouter_api_key: String,
+    openrouter_model: String,
+    openrouter_endpoint: String,
     agentic_mode: bool,
     auto_apply_file_plans: bool,
     auto_approve_actions: bool,
@@ -190,6 +194,18 @@ struct OllamaChatRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct OpenRouterChatRequest {
+    endpoint: String,
+    api_key: String,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    temperature: f32,
+    max_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CodexChatRequest {
     system_prompt: String,
     user_prompt: String,
@@ -216,6 +232,15 @@ struct OllamaPullStreamEvent {
     completed: Option<u64>,
     total: Option<u64>,
     percent: Option<f64>,
+    done: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenRouterStreamEvent {
+    request_id: String,
+    delta: Option<String>,
     done: bool,
     error: Option<String>,
 }
@@ -271,15 +296,19 @@ fn default_allowed_command_prefixes() -> Vec<String> {
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
-            model_name: "qwen2.5-coder:7b".to_string(),
+            ai_provider: "openrouter".to_string(),
+            model_name: "qwen/qwen3.5-9b".to_string(),
             display_model_label: String::new(),
+            openrouter_api_key: String::new(),
+            openrouter_model: "qwen/qwen3.5-9b".to_string(),
+            openrouter_endpoint: "https://openrouter.ai/api/v1/chat/completions".to_string(),
             agentic_mode: true,
             auto_apply_file_plans: false,
             auto_approve_actions: false,
             working_only_mode: true,
             autonomous_agent_enabled: true,
             full_access_mode: true,
-            max_agent_steps: 8,
+            max_agent_steps: 20,
             ollama_endpoint: "http://127.0.0.1:11434".to_string(),
             temperature: 0.2,
             max_tokens: 2048,
@@ -891,6 +920,10 @@ fn emit_ollama_pull_event(app: &AppHandle, payload: OllamaPullStreamEvent) {
     let _ = app.emit("ollama_pull_stream", payload);
 }
 
+fn emit_openrouter_event(app: &AppHandle, payload: OpenRouterStreamEvent) {
+    let _ = app.emit("openrouter_stream", payload);
+}
+
 fn emit_codex_event(app: &AppHandle, payload: CodexStreamEvent) {
     let _ = app.emit("codex_stream", payload);
 }
@@ -1005,6 +1038,169 @@ async fn stream_ollama_response(
         emit_ollama_event(
             &app,
             OllamaStreamEvent {
+                request_id,
+                delta: None,
+                done: true,
+                error: None,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+async fn stream_openrouter_response(
+    app: AppHandle,
+    request: OpenRouterChatRequest,
+    request_id: String,
+) -> Result<(), String> {
+    let endpoint = normalize_endpoint(&request.endpoint);
+    let api_key = request.api_key.trim().to_string();
+    let model = request.model.trim().to_string();
+
+    if endpoint.is_empty() {
+        return Err("OpenRouter endpoint is missing.".to_string());
+    }
+
+    if api_key.is_empty() {
+        return Err("OpenRouter API key is missing.".to_string());
+    }
+
+    if model.is_empty() {
+        return Err("OpenRouter model is missing.".to_string());
+    }
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    let payload = json!({
+        "model": model,
+        "stream": true,
+        "messages": [
+            { "role": "system", "content": request.system_prompt },
+            { "role": "user", "content": request.user_prompt }
+        ],
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens
+    });
+
+    let response = client
+        .post(endpoint)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://local-code-assistant.app")
+        .header("X-Title", "Local Code Assistant")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| format!("Failed to reach OpenRouter endpoint: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        return Err(format!("OpenRouter request failed ({status}): {body}"));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut done = false;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|err| format!("Streaming error from OpenRouter: {err}"))?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(index) = buffer.find('\n') {
+            let line = buffer[..index].trim().to_string();
+            buffer.drain(..=index);
+
+            if line.is_empty() || !line.starts_with("data:") {
+                continue;
+            }
+
+            let data = line["data:".len()..].trim();
+            if data.is_empty() {
+                continue;
+            }
+
+            if data == "[DONE]" {
+                emit_openrouter_event(
+                    &app,
+                    OpenRouterStreamEvent {
+                        request_id: request_id.clone(),
+                        delta: None,
+                        done: true,
+                        error: None,
+                    },
+                );
+                done = true;
+                break;
+            }
+
+            let value: Value = serde_json::from_str(data)
+                .map_err(|err| format!("Failed to parse OpenRouter stream chunk: {err}"))?;
+
+            if let Some(error_message) = value
+                .get("error")
+                .and_then(|error| {
+                    error
+                        .get("message")
+                        .and_then(|message| message.as_str())
+                        .or_else(|| error.as_str())
+                })
+            {
+                return Err(error_message.to_string());
+            }
+
+            let delta = value
+                .get("choices")
+                .and_then(|choices| choices.as_array())
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("delta"))
+                .and_then(|delta| delta.get("content"))
+                .and_then(|content| content.as_str())
+                .map(|content| content.to_string());
+
+            let is_done = value
+                .get("choices")
+                .and_then(|choices| choices.as_array())
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("finish_reason"))
+                .map(|finish| !finish.is_null())
+                .unwrap_or(false);
+
+            if delta.is_some() || is_done {
+                emit_openrouter_event(
+                    &app,
+                    OpenRouterStreamEvent {
+                        request_id: request_id.clone(),
+                        delta,
+                        done: is_done,
+                        error: None,
+                    },
+                );
+            }
+
+            if is_done {
+                done = true;
+                break;
+            }
+        }
+
+        if done {
+            break;
+        }
+    }
+
+    if !done {
+        emit_openrouter_event(
+            &app,
+            OpenRouterStreamEvent {
                 request_id,
                 delta: None,
                 done: true,
@@ -2395,6 +2591,31 @@ async fn start_ollama_chat(
 }
 
 #[tauri::command]
+async fn start_openrouter_chat(
+    app: AppHandle,
+    request: OpenRouterChatRequest,
+    request_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) =
+            stream_openrouter_response(app.clone(), request, request_id.clone()).await
+        {
+            emit_openrouter_event(
+                &app,
+                OpenRouterStreamEvent {
+                    request_id,
+                    delta: None,
+                    done: true,
+                    error: Some(error),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn start_codex_chat(
     app: AppHandle,
     request: CodexChatRequest,
@@ -2498,6 +2719,7 @@ fn main() {
             ollama_search_models,
             install_ollama,
             start_ollama,
+            start_openrouter_chat,
             start_ollama_chat,
             start_ollama_pull,
         ])

@@ -2,7 +2,7 @@
 
 Local Code Assistant is a desktop AI coding app for **macOS** and **Windows**.
 
-It helps developers write, understand, and improve code with a clean mini-IDE interface and local AI models through Ollama.
+It helps developers write, understand, and improve code with a clean mini-IDE interface.
 
 ## What The App Does
 
@@ -20,18 +20,14 @@ It helps developers write, understand, and improve code with a clean mini-IDE in
 - **Left panel:** project and file explorer
 - **Center:** code editor with tabs
 - **Right panel:** AI chat assistant
-- **Settings:** model selection, Ollama connection, context options, and behavior controls
+- **Settings:** behavior controls, context options, and theme
 
 ## Model Experience (Inside The App)
 
-- Connects to local Ollama
-- Shows installed models
-- Lets users search for models
-- Lets users download models directly in the app
-- Saves downloaded models on the user’s system
-- Lets users choose which installed model to use
-
-No terminal commands are required for normal model management.
+- Uses **OpenRouter** by default
+- Uses one fixed model: `qwen/qwen3.5-9b`
+- End users cannot switch provider or model in the UI
+- API key is managed by the app build (`VITE_OPENROUTER_API_KEY`)
 
 ## Safety And Privacy
 

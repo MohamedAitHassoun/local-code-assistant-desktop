@@ -7,6 +7,7 @@ interface ChatPanelProps {
   loading: boolean;
   error: string | null;
   onboardingMessage: string | null;
+  aiProvider: "ollama" | "openrouter";
   ollamaStatus: OllamaStatus | null;
   autoApproveEnabled: boolean;
   onSend: (prompt: string) => Promise<void>;
@@ -43,6 +44,7 @@ export function ChatPanel({
   loading,
   error,
   onboardingMessage,
+  aiProvider,
   ollamaStatus,
   autoApproveEnabled,
   onSend,
@@ -88,6 +90,11 @@ export function ChatPanel({
     }
   };
 
+  const providerHint =
+    aiProvider === "openrouter"
+      ? "Using managed OpenRouter API for responses."
+      : "Everything stays local with Ollama.";
+
   return (
     <aside className="flex h-full min-h-0 flex-col border-l border-border bg-panel/95">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -118,41 +125,45 @@ export function ChatPanel({
       {onboardingMessage && (
         <div className="m-3 rounded-lg border border-warning/30 bg-amber-50 px-3 py-2 text-xs text-warning">
           <p>{onboardingMessage}</p>
-          {ollamaStatus?.detectedPath && (
-            <p className="mt-1 break-all text-[11px] text-warning/90">
-              Detected binary: {ollamaStatus.detectedPath}
-            </p>
+          {aiProvider === "ollama" && (
+            <>
+              {ollamaStatus?.detectedPath && (
+                <p className="mt-1 break-all text-[11px] text-warning/90">
+                  Detected binary: {ollamaStatus.detectedPath}
+                </p>
+              )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {!ollamaStatus?.installed && (
+                  <button
+                    type="button"
+                    onClick={() => void runAction("install", onInstallOllama)}
+                    disabled={Boolean(actionBusy)}
+                    className="rounded border border-warning/40 bg-white px-2 py-1 text-[11px] text-warning hover:bg-amber-100 disabled:opacity-60"
+                  >
+                    {actionBusy === "install" ? "Opening..." : "Install Ollama"}
+                  </button>
+                )}
+                {ollamaStatus?.installed && !ollamaStatus.running && (
+                  <button
+                    type="button"
+                    onClick={() => void runAction("start", onStartOllama)}
+                    disabled={Boolean(actionBusy)}
+                    className="rounded border border-warning/40 bg-white px-2 py-1 text-[11px] text-warning hover:bg-amber-100 disabled:opacity-60"
+                  >
+                    {actionBusy === "start" ? "Starting..." : "Start Ollama"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void runAction("refresh", onRefreshOllama)}
+                  disabled={Boolean(actionBusy)}
+                  className="rounded border border-warning/40 bg-white px-2 py-1 text-[11px] text-warning hover:bg-amber-100 disabled:opacity-60"
+                >
+                  {actionBusy === "refresh" ? "Refreshing..." : "Refresh status"}
+                </button>
+              </div>
+            </>
           )}
-          <div className="mt-2 flex flex-wrap gap-2">
-            {!ollamaStatus?.installed && (
-              <button
-                type="button"
-                onClick={() => void runAction("install", onInstallOllama)}
-                disabled={Boolean(actionBusy)}
-                className="rounded border border-warning/40 bg-white px-2 py-1 text-[11px] text-warning hover:bg-amber-100 disabled:opacity-60"
-              >
-                {actionBusy === "install" ? "Opening..." : "Install Ollama"}
-              </button>
-            )}
-            {ollamaStatus?.installed && !ollamaStatus.running && (
-              <button
-                type="button"
-                onClick={() => void runAction("start", onStartOllama)}
-                disabled={Boolean(actionBusy)}
-                className="rounded border border-warning/40 bg-white px-2 py-1 text-[11px] text-warning hover:bg-amber-100 disabled:opacity-60"
-              >
-                {actionBusy === "start" ? "Starting..." : "Start Ollama"}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => void runAction("refresh", onRefreshOllama)}
-              disabled={Boolean(actionBusy)}
-              className="rounded border border-warning/40 bg-white px-2 py-1 text-[11px] text-warning hover:bg-amber-100 disabled:opacity-60"
-            >
-              {actionBusy === "refresh" ? "Refreshing..." : "Refresh status"}
-            </button>
-          </div>
         </div>
       )}
 
@@ -197,7 +208,7 @@ export function ChatPanel({
         />
         <div className="mt-2 flex items-center justify-between">
           <span className="text-xs text-ink/50">
-            {loading ? "Please wait until the current task is finished." : "Everything stays local by default."}
+            {loading ? "Please wait until the current task is finished." : providerHint}
           </span>
           <button
             type="button"

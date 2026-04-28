@@ -46,7 +46,23 @@ function looksLikeBuildRequest(prompt: string): boolean {
     "implement",
     "make",
     "add",
-    "develop"
+    "develop",
+    "improve",
+    "update",
+    "modify",
+    "change",
+    "edit",
+    "redesign",
+    "restyle",
+    "style",
+    "modern",
+    "professional",
+    "polish",
+    "enhance",
+    "beautify",
+    "remove",
+    "delete",
+    "replace"
   ];
 
   return actionHints.some((hint) => text.includes(hint));
@@ -70,7 +86,7 @@ export function systemPromptForIntent(intent: ChatContextPayload["intent"]): str
       return "You are a bug-fix coding assistant. Return corrected code and brief rationale.";
     case "chat":
     default:
-      return "You are a practical local coding assistant. First detect if the user is asking you to implement changes in the project. If yes, return: (1) a short numbered step-by-step plan where EVERY step includes one runnable command, and (2) a JSON block with fileOperations using relative paths and full file contents. Include directory creation commands (for example `mkdir -p ...`) before file write steps when needed. Do not use placeholders. If no implementation is requested, provide concise technical guidance.";
+      return "You are a practical local coding assistant. First detect if the user is asking you to implement changes in the project. If yes, return: (1) a short numbered step-by-step plan where EVERY step includes exactly one runnable command, and (2) a JSON block with fileOperations using relative paths and full file contents. Include directory creation commands (for example `mkdir -p ...`) before file write steps when needed. Do not use placeholders. Never output multi-OS command alternatives in one block (for example do not include open + xdg-open + start together). If no implementation is requested, provide concise technical guidance.";
   }
 }
 
@@ -98,6 +114,6 @@ export function userPromptForIntent(payload: ChatContextPayload): string {
         looksLikeBuildRequest(payload.userPrompt)
           ? "Implementation intent detected. Produce a step-by-step execution plan where each step has a runnable command (`Command:`), then a JSON block with fileOperations."
           : "If the request needs project file changes, include a step-by-step plan where each step has a runnable command (`Command:`), then a JSON block with fileOperations."
-      }\n\nRules:\n- If the user message is a greeting or casual chat with no task, reply naturally and do NOT return JSON.\n- Commands should assume execution from the currently opened project root.\n- If creating files in new folders, include mkdir commands before creation.\n- Prefer safe, non-destructive commands.\n\nJSON format:\n\`\`\`json\n{"fileOperations":[{"path":"relative/path.ext","action":"update","content":"..."}]}\n\`\`\`\n\nUser request: ${payload.userPrompt}`;
+      }\n\nRules:\n- If the user message is a greeting or casual chat with no task, reply naturally and do NOT return JSON.\n- Commands should assume execution from the currently opened project root.\n- Each step must contain exactly one executable command line.\n- Never include OS alternatives in the same command block.\n- If creating files in new folders, include mkdir commands before creation.\n- Prefer safe, non-destructive commands.\n\nJSON format:\n\`\`\`json\n{"fileOperations":[{"path":"relative/path.ext","action":"update","content":"..."}]}\n\`\`\`\n\nUser request: ${payload.userPrompt}`;
   }
 }
