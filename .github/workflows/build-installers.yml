@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+env:
+  VITE_OPENROUTER_API_KEY: ${{ secrets.VITE_OPENROUTER_API_KEY }}
+
 jobs:
   macos-universal:
     name: macOS Universal (app + dmg)
