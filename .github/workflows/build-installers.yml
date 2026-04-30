@@ -46,19 +46,19 @@ jobs:
       - name: Create universal dmg
         shell: bash
         run: |
-          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Local Code Assistant.app"
+          APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/CopS.ai.app"
           DMG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/dmg"
-          DMG_PATH="$DMG_DIR/Local Code Assistant_universal.dmg"
+          DMG_PATH="$DMG_DIR/CopS.ai_universal.dmg"
 
           mkdir -p "$DMG_DIR"
-          hdiutil create -volname "Local Code Assistant" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+          hdiutil create -volname "CopS.ai" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-universal-installers
           path: |
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/Local Code Assistant.app
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/CopS.ai.app
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
 

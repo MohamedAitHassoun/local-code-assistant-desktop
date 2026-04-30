@@ -1,6 +1,6 @@
-# Local Code Assistant
+# CopS.ai
 
-Local Code Assistant is a desktop AI coding app for **macOS** and **Windows**.
+CopS.ai is a desktop AI coding app for **macOS** and **Windows**.
 
 It helps developers write, understand, and improve code with a clean mini-IDE interface.
 

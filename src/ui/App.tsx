@@ -33,7 +33,6 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { TopToolbar } from "./layout/TopToolbar";
 import {
   EMBEDDED_OPENROUTER_API_KEY,
-  FIXED_OPENROUTER_MODEL,
   normalizeLockedAiSettings
 } from "@/lib/constants";
 import type {
@@ -67,6 +66,8 @@ export default function App() {
     setIsScanning,
     isScanning,
     toggleContextFile,
+    addContextFiles,
+    clearContextFiles,
     setProjectSummary
   } = useProjectStore();
 
@@ -342,6 +343,11 @@ export default function App() {
   };
 
   const handleSummarizeFile = async () => {
+    if (loading) {
+      setAppError("AI is still working. Wait for the current task to finish, then summarize.");
+      return;
+    }
+
     if (!activeTab) {
       setAppError("Open a file first to summarize it.");
       return;
@@ -353,12 +359,18 @@ export default function App() {
         prompt: `Summarize the file: ${basename(activeTab.path)}`
       });
       setAppError(null);
-    } catch {
-      // Managed by chat store.
+    } catch (err) {
+      const message = extractErrorMessage(err, "Failed to summarize this file.");
+      setAppError(message);
     }
   };
 
   const handleSummarizeProject = async () => {
+    if (loading) {
+      setAppError("AI is still working. Wait for the current task to finish, then summarize.");
+      return;
+    }
+
     if (!rootPath && files.length === 0) {
       setAppError("Open a project folder first.");
       return;
@@ -371,8 +383,9 @@ export default function App() {
       });
       setProjectSummary(summary);
       setAppError(null);
-    } catch {
-      // Managed by chat store.
+    } catch (err) {
+      const message = extractErrorMessage(err, "Failed to summarize this project.");
+      setAppError(message);
     }
   };
 
@@ -415,6 +428,42 @@ export default function App() {
 
   const handleSendChat = async (prompt: string) => {
     await sendAssistantPrompt({ intent: "chat", prompt });
+  };
+
+  const handleAttachContextFiles = async () => {
+    const selected = await open({
+      title: "Attach files for AI context",
+      directory: false,
+      multiple: true,
+      defaultPath: rootPath ?? undefined,
+      filters: [
+        {
+          name: "Documents",
+          extensions: ["pdf", "doc", "docx"]
+        }
+      ]
+    });
+
+    if (!selected) {
+      return;
+    }
+
+    const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
+    const allowedPattern = /\.(pdf|doc|docx)$/i;
+    const validPaths = paths.filter((path) => allowedPattern.test(path));
+
+    if (validPaths.length === 0) {
+      setAppError("Only PDF, DOC, and DOCX files can be attached.");
+      return;
+    }
+
+    if (validPaths.length < paths.length) {
+      setAppError("Some selected files were skipped. Only PDF, DOC, and DOCX are supported.");
+    } else {
+      setAppError(null);
+    }
+
+    addContextFiles(validPaths);
   };
 
   const handleInstallOllama = async () => {
@@ -469,15 +518,6 @@ export default function App() {
   const handleToggleAutoApprove = () => {
     persistSettingsPatch({ autoApproveActions: !settings.autoApproveActions });
   };
-
-  const activeModelLabel = useMemo(() => {
-    const customLabel = settings.displayModelLabel.trim();
-    if (customLabel) {
-      return customLabel;
-    }
-
-    return FIXED_OPENROUTER_MODEL;
-  }, [settings.displayModelLabel]);
 
   const persistLocalMessage = (message: ChatMessage) => {
     appendMessage(message);
@@ -754,11 +794,8 @@ export default function App() {
         onSummarizeFile={() => void handleSummarizeFile()}
         onSummarizeProject={() => void handleSummarizeProject()}
         onOpenSettings={() => setSettingsOpen(true)}
-        activeModel={activeModelLabel}
         hasDirtyFile={Boolean(activeTab?.dirty)}
-        aiProvider={settings.aiProvider}
-        openrouterConfigured={Boolean(settings.openrouterApiKey.trim())}
-        ollamaStatus={ollamaStatus}
+        assistantBusy={loading}
       />
 
       {(appError || isScanning) && (
@@ -808,7 +845,10 @@ export default function App() {
               aiProvider={settings.aiProvider}
               ollamaStatus={ollamaStatus}
               autoApproveEnabled={settings.autoApproveActions}
+              attachedFileCount={selectedContextFiles.length}
               onSend={handleSendChat}
+              onAttachFiles={handleAttachContextFiles}
+              onClearAttachedFiles={clearContextFiles}
               onClearHistory={handleClearHistory}
               onInstallOllama={handleInstallOllama}
               onStartOllama={handleStartOllama}

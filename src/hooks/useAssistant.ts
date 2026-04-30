@@ -40,10 +40,21 @@ async function hydrateContextFiles(
   allowedRoot?: string
 ): Promise<ContextFile[]> {
   const files: ContextFile[] = [];
+  const normalizedAllowedRoot = allowedRoot
+    ? normalizePath(allowedRoot).replace(/\/+$/, "")
+    : null;
 
   for (const path of paths) {
     try {
-      const file = await readContextFile(path, allowedRoot);
+      const normalizedPath = normalizePath(path);
+      const fileAllowedRoot =
+        normalizedAllowedRoot &&
+        (normalizedPath === normalizedAllowedRoot ||
+          normalizedPath.startsWith(`${normalizedAllowedRoot}/`))
+          ? allowedRoot
+          : undefined;
+
+      const file = await readContextFile(path, fileAllowedRoot);
 
       files.push({
         path: file.path,

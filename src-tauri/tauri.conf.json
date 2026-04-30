@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Local Code Assistant",
+  "productName": "CopS.ai",
   "version": "0.1.0",
-  "identifier": "com.localcodeassistant.desktop",
+  "identifier": "com.copsai.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Local Code Assistant",
+        "title": "CopS.ai",
         "label": "main",
         "width": 1500,
         "height": 950,

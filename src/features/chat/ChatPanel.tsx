@@ -10,7 +10,10 @@ interface ChatPanelProps {
   aiProvider: "ollama" | "openrouter";
   ollamaStatus: OllamaStatus | null;
   autoApproveEnabled: boolean;
+  attachedFileCount: number;
   onSend: (prompt: string) => Promise<void>;
+  onAttachFiles: () => Promise<void>;
+  onClearAttachedFiles: () => void;
   onClearHistory: () => Promise<void>;
   onInstallOllama: () => Promise<void>;
   onStartOllama: () => Promise<void>;
@@ -47,7 +50,10 @@ export function ChatPanel({
   aiProvider,
   ollamaStatus,
   autoApproveEnabled,
+  attachedFileCount,
   onSend,
+  onAttachFiles,
+  onClearAttachedFiles,
   onClearHistory,
   onInstallOllama,
   onStartOllama,
@@ -55,15 +61,29 @@ export function ChatPanel({
   onToggleAutoApprove
 }: ChatPanelProps) {
   const [prompt, setPrompt] = useState("");
-  const [actionBusy, setActionBusy] = useState<null | "install" | "start" | "refresh">(null);
+  const [actionBusy, setActionBusy] = useState<null | "install" | "start" | "refresh" | "attach">(
+    null
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollEnabledRef = useRef(true);
 
   useEffect(() => {
     const container = scrollRef.current;
-    if (container) {
+    if (container && autoScrollEnabledRef.current) {
       container.scrollTop = container.scrollHeight;
     }
   }, [messages, loading]);
+
+  const handleScroll = () => {
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    autoScrollEnabledRef.current = distanceFromBottom < 48;
+  };
 
   const handleSubmit = async () => {
     const cleaned = prompt.trim();
@@ -71,8 +91,12 @@ export function ChatPanel({
       return;
     }
 
+    autoScrollEnabledRef.current = true;
     setPrompt("");
     await onSend(cleaned);
+    if (attachedFileCount > 0) {
+      onClearAttachedFiles();
+    }
   };
 
   const runAction = async (
@@ -83,6 +107,21 @@ export function ChatPanel({
     setActionBusy(action);
     try {
       await handler();
+    } catch {
+      // Errors are surfaced by parent app state.
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handleAttachFiles = async () => {
+    if (actionBusy) {
+      return;
+    }
+
+    setActionBusy("attach");
+    try {
+      await onAttachFiles();
     } catch {
       // Errors are surfaced by parent app state.
     } finally {
@@ -173,7 +212,11 @@ export function ChatPanel({
         </div>
       )}
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-auto px-3 py-3">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 space-y-3 overflow-auto px-3 py-3"
+      >
         {messages.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border bg-slate-50 p-3 text-sm text-ink/70">
             Ask anything about your code. You can also use editor actions like Explain, Fix, Refactor, and Generate tests.
@@ -206,18 +249,42 @@ export function ChatPanel({
           }
           className="h-28 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink/50 focus:ring disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-ink/60"
         />
+        {attachedFileCount > 0 && (
+          <div className="mt-2 flex items-center justify-between rounded border border-border bg-slate-50 px-2 py-1 text-[11px] text-ink/70">
+            <span>
+              {attachedFileCount} file{attachedFileCount === 1 ? "" : "s"} attached to next message
+            </span>
+            <button
+              type="button"
+              onClick={onClearAttachedFiles}
+              className="rounded border border-border bg-white px-2 py-0.5 text-[11px] text-ink hover:bg-slate-100"
+            >
+              Clear files
+            </button>
+          </div>
+        )}
         <div className="mt-2 flex items-center justify-between">
           <span className="text-xs text-ink/50">
             {loading ? "Please wait until the current task is finished." : providerHint}
           </span>
-          <button
-            type="button"
-            onClick={() => void handleSubmit()}
-            disabled={loading || !prompt.trim()}
-            className="rounded border border-accent bg-accent px-3 py-1.5 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? "Working..." : "Send"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleAttachFiles()}
+              disabled={Boolean(actionBusy) || loading}
+              className="rounded border border-border bg-white px-3 py-1.5 text-sm text-ink hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {actionBusy === "attach" ? "Attaching..." : "Attach file"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={loading || !prompt.trim()}
+              className="rounded border border-accent bg-accent px-3 py-1.5 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? "Working..." : "Send"}
+            </button>
+          </div>
         </div>
       </div>
     </aside>

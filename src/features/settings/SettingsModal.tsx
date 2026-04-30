@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  EMBEDDED_OPENROUTER_API_KEY,
-  FIXED_AI_PROVIDER,
-  FIXED_OPENROUTER_MODEL,
   normalizeLockedAiSettings
 } from "@/lib/constants";
 import type { AppSettings } from "@/types";
@@ -69,30 +66,6 @@ export function SettingsModal({
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="rounded border border-border bg-slate-50 p-3 text-xs text-ink/80 md:col-span-2">
-            <p className="font-medium text-ink">
-              AI provider is fixed to{" "}
-              {FIXED_AI_PROVIDER === "openrouter" ? "OpenRouter" : FIXED_AI_PROVIDER}.
-            </p>
-            <p className="mt-1">
-              Model is fixed to <code>{FIXED_OPENROUTER_MODEL}</code>.
-            </p>
-            <p className="mt-1">
-              API key is managed by the app build{" "}
-              {EMBEDDED_OPENROUTER_API_KEY ? "(embedded)." : "(missing in this build)."}
-            </p>
-          </div>
-
-          <label className="text-sm text-ink md:col-span-2">
-            Model label shown in toolbar (optional)
-            <input
-              value={form.displayModelLabel}
-              onChange={(event) => updateForm("displayModelLabel", event.target.value)}
-              className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
-              placeholder={FIXED_OPENROUTER_MODEL}
-            />
-          </label>
-
           <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
             <input
               type="checkbox"

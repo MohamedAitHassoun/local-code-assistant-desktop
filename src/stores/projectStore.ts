@@ -13,6 +13,8 @@ interface ProjectStoreState {
   setRootPath: (path: string | null) => void;
   setIsScanning: (isScanning: boolean) => void;
   toggleContextFile: (path: string) => void;
+  addContextFiles: (paths: string[]) => void;
+  clearContextFiles: () => void;
   clearProject: () => void;
   setProjectSummary: (summary: string) => void;
 }
@@ -44,6 +46,23 @@ export const useProjectStore = create<ProjectStoreState>((set) => ({
           ? state.selectedContextFiles.filter((item) => item !== path)
           : [...state.selectedContextFiles, path]
       };
+    }),
+  addContextFiles: (paths) =>
+    set((state) => {
+      const merged = new Set(state.selectedContextFiles);
+      for (const path of paths) {
+        const trimmed = path.trim();
+        if (!trimmed) continue;
+        merged.add(trimmed);
+      }
+
+      return {
+        selectedContextFiles: Array.from(merged)
+      };
+    }),
+  clearContextFiles: () =>
+    set({
+      selectedContextFiles: []
     }),
   clearProject: () =>
     set({
