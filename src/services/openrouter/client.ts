@@ -51,21 +51,55 @@ function friendlyOpenRouterError(message: string): string {
 
 export async function streamOpenRouterChat(
   request: OpenRouterChatRequest,
-  onChunk: (delta: string) => void
+  onChunk: (delta: string) => void,
+  options?: { signal?: AbortSignal }
 ): Promise<string> {
+  const signal = options?.signal;
   const runAttempt = async (): Promise<string> => {
     const requestId = crypto.randomUUID();
 
     return new Promise<string>((resolve, reject) => {
       let finalText = "";
       let unlisten: UnlistenFn | null = null;
+      let settled = false;
 
       const cleanup = () => {
-        if (!unlisten) return;
-        const current = unlisten;
-        unlisten = null;
-        void current();
+        if (unlisten) {
+          const current = unlisten;
+          unlisten = null;
+          void current();
+        }
+        if (signal) {
+          signal.removeEventListener("abort", abortHandler);
+        }
       };
+
+      const settleResolve = (value: string) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+
+      const settleReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const abortHandler = () => {
+        settleResolve(finalText);
+      };
+
+      if (signal?.aborted) {
+        settleResolve(finalText);
+        return;
+      }
+
+      if (signal) {
+        signal.addEventListener("abort", abortHandler, { once: true });
+      }
 
       listen<OpenRouterStreamEvent>("openrouter_stream", (event) => {
         const payload = event.payload;
@@ -74,28 +108,39 @@ export async function streamOpenRouterChat(
         }
 
         if (payload.error) {
-          cleanup();
-          reject(new Error(friendlyOpenRouterError(payload.error)));
+          if (signal?.aborted) {
+            settleResolve(finalText);
+            return;
+          }
+          settleReject(new Error(friendlyOpenRouterError(payload.error)));
           return;
         }
 
         if (payload.delta) {
           finalText += payload.delta;
-          onChunk(payload.delta);
+          if (!signal?.aborted) {
+            onChunk(payload.delta);
+          }
         }
 
         if (payload.done) {
-          cleanup();
-          resolve(finalText);
+          settleResolve(finalText);
         }
       })
         .then((unlistenFn) => {
           unlisten = unlistenFn;
+          if (signal?.aborted) {
+            settleResolve(finalText);
+            return null;
+          }
           return invoke("start_openrouter_chat", { request, requestId });
         })
         .catch((error) => {
-          cleanup();
-          reject(new Error(friendlyOpenRouterError(extractErrorText(error))));
+          if (signal?.aborted) {
+            settleResolve(finalText);
+            return;
+          }
+          settleReject(new Error(friendlyOpenRouterError(extractErrorText(error))));
         });
     });
   };

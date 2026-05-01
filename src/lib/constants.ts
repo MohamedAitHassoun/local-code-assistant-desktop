@@ -69,7 +69,7 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
 ];
 
 export const FIXED_AI_PROVIDER: AppSettings["aiProvider"] = "openrouter";
-export const FIXED_OPENROUTER_MODEL = "qwen/qwen3.5-9b";
+export const FIXED_OPENROUTER_MODEL = "x-ai/grok-4.1-fast";
 export const FIXED_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 export const EMBEDDED_OPENROUTER_API_KEY = (import.meta.env.VITE_OPENROUTER_API_KEY ?? "").trim();
 
@@ -89,7 +89,7 @@ export function normalizeLockedAiSettings(settings: AppSettings): AppSettings {
 
 const BASE_DEFAULT_SETTINGS: AppSettings = {
   aiProvider: "openrouter",
-  modelName: "qwen/qwen3.5-9b",
+  modelName: FIXED_OPENROUTER_MODEL,
   displayModelLabel: "",
   openrouterApiKey: EMBEDDED_OPENROUTER_API_KEY,
   openrouterModel: FIXED_OPENROUTER_MODEL,

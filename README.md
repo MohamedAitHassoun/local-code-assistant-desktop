@@ -25,7 +25,7 @@ It helps developers write, understand, and improve code with a clean mini-IDE in
 ## Model Experience (Inside The App)
 
 - Uses **OpenRouter** by default
-- Uses one fixed model: `qwen/qwen3.5-9b`
+- Uses one fixed model: `x-ai/grok-4.1-fast`
 - End users cannot switch provider or model in the UI
 - API key is managed by the app build (`VITE_OPENROUTER_API_KEY`)
 
@@ -45,6 +45,7 @@ It helps developers write, understand, and improve code with a clean mini-IDE in
 - PDF documents
 - DOCX documents (and limited DOC support on macOS)
 - Images (model-dependent understanding)
+- Other file types can be attached as binary context (size-limited)
 
 ## Typical User Flows
 

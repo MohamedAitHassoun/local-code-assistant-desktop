@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import {
   basename,
   buildTimestamp,
@@ -60,7 +60,9 @@ async function hydrateContextFiles(
         path: file.path,
         content: file.content.slice(0, 12000),
         mediaType: file.mediaType,
-        imageBase64: file.mediaType === "image" ? undefined : file.imageBase64
+        mimeType: file.mimeType,
+        imageBase64: file.imageBase64,
+        fileBase64: file.fileBase64
       });
     } catch {
       // Keep the request resilient even if one file fails to load.
@@ -147,6 +149,28 @@ function shouldUseAutonomousForPrompt(prompt: string): boolean {
     looksLikeProjectAnalysisRequest(prompt) ||
     looksLikeFileAnalysisRequest(prompt)
   );
+}
+
+function looksLikeClarificationRequest(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  const clarificationHints = [
+    "need more information",
+    "need more details",
+    "please provide",
+    "can you provide",
+    "which one",
+    "what should",
+    "what do you want",
+    "i need",
+    "not enough information",
+    "unclear"
+  ];
+
+  return clarificationHints.some((hint) => normalized.includes(hint)) || normalized.includes("?");
 }
 
 type AgentDecision =
@@ -617,6 +641,15 @@ export function useAssistant() {
     useEditorStore();
   const { rootPath, selectedContextFiles, projectSummary, files, setProject, setIsScanning } =
     useProjectStore();
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+
+  const stopAssistant = useCallback(() => {
+    const active = activeAbortControllerRef.current;
+    if (active && !active.signal.aborted) {
+      active.abort();
+    }
+    setLoading(false);
+  }, [setLoading]);
 
   const sendAssistantPrompt = useCallback(
     async ({ prompt, intent }: SendAssistantArgs): Promise<string> => {
@@ -641,6 +674,9 @@ export function useAssistant() {
         projectPath: rootPath ?? undefined,
         metadata: { intent }
       });
+
+      const abortController = new AbortController();
+      activeAbortControllerRef.current = abortController;
 
       setLoading(true);
       setError(null);
@@ -709,8 +745,13 @@ export function useAssistant() {
       const callModel = async (
         modelSystemPrompt: string,
         modelUserPrompt: string,
-        streamToMessage: boolean
+        streamToMessage: boolean,
+        includeContextFiles: boolean
       ): Promise<string> => {
+        if (abortController.signal.aborted) {
+          return "";
+        }
+
         const runtimeKey = EMBEDDED_OPENROUTER_API_KEY || settings.openrouterApiKey.trim();
         if (!runtimeKey) {
           throw new Error(
@@ -726,19 +767,25 @@ export function useAssistant() {
             systemPrompt: modelSystemPrompt,
             userPrompt: modelUserPrompt,
             temperature: settings.temperature,
-            maxTokens: settings.maxTokens
+            maxTokens: settings.maxTokens,
+            contextFiles: includeContextFiles ? hydratedContextFiles : undefined
           },
           (delta) => {
-            if (streamToMessage && !hideAssistantWhileWorking) {
+            if (streamToMessage && !hideAssistantWhileWorking && !abortController.signal.aborted) {
               appendMessageContent(assistantMessageId, delta);
             }
-          }
+          },
+          { signal: abortController.signal }
         );
       };
 
       const runAutonomousLoop = async (): Promise<string> => {
         if (!rootPath) {
           return "Open a project folder first, then I can autonomously inspect files and run steps.";
+        }
+
+        if (abortController.signal.aborted) {
+          return "Stopped by user.";
         }
 
         const maxSteps = Math.min(Math.max(settings.maxAgentSteps || 8, 2), 20);
@@ -754,6 +801,14 @@ export function useAssistant() {
             ? `Project files (sample):\n${indexedRelativePaths}`
             : "Project files list is currently empty."
         ];
+
+        if (hydratedContextFiles.length > 0) {
+          observations.push(
+            `Attached files:\n${hydratedContextFiles
+              .map((file) => `- ${file.path} (${file.mediaType ?? "text"})`)
+              .join("\n")}`
+          );
+        }
 
         const mentionedFile = resolvedPrompt.match(
           /\b[\w.-]+\.(py|js|ts|tsx|jsx|java|cpp|cc|cxx|c|h|hpp|json|html|css|md|txt)\b/i
@@ -780,8 +835,13 @@ export function useAssistant() {
           settings.commandExecutionEnabled || settings.fullAccessMode;
         const repeatedActionCounts = new Map<string, number>();
         const duplicateActionLimit = 2;
+        let executedActions = 0;
 
         for (let step = 1; step <= maxSteps; step += 1) {
+          if (abortController.signal.aborted) {
+            return "Stopped by user.";
+          }
+
           pushSystemEvent(`Working... step ${step}/${maxSteps}`);
 
           const agentSystemPrompt = `You are an autonomous local coding agent with tool-like actions.
@@ -794,6 +854,9 @@ Return ONLY JSON with one action:
 Rules:
 - Inspect files before explaining project internals.
 - If user asks about a specific file, read that file first.
+- Execute first. Do not ask clarifying questions unless truly blocked.
+- For creation/build tasks, choose sensible defaults and produce a complete first version directly.
+- If the user asks for a new project/site/app, create needed folders/files yourself inside the current project root.
 - Use one command at a time (EXACTLY one command string, no newlines, no command lists).
 - For creating/updating/deleting source files, ALWAYS use apply_file_operations with full contents.
 - Keep apply_file_operations focused: prefer small batches (1-3 files per step), then continue.
@@ -811,7 +874,17 @@ ${observations.map((item, index) => `${index + 1}. ${item}`).join("\n\n")}
 
 Choose the next best action and return ONLY JSON.`;
 
-          const decisionText = await callModel(agentSystemPrompt, agentUserPrompt, false);
+          const decisionText = await callModel(
+            agentSystemPrompt,
+            agentUserPrompt,
+            false,
+            step === 1 && hydratedContextFiles.length > 0
+          );
+
+          if (abortController.signal.aborted) {
+            return "Stopped by user.";
+          }
+
           let decision = parseAgentDecision(decisionText);
 
           if (decision.action === "final") {
@@ -856,6 +929,16 @@ Choose the next best action and return ONLY JSON.`;
           }
 
           if (decision.action === "final") {
+            if (
+              executionRequest &&
+              executedActions === 0 &&
+              looksLikeClarificationRequest(decision.message)
+            ) {
+              observations.push(
+                "Assistant asked for extra clarification before executing. Continue with reasonable defaults and execute now."
+              );
+              continue;
+            }
             return decision.message || "Task completed.";
           }
 
@@ -876,6 +959,7 @@ Choose the next best action and return ONLY JSON.`;
               )}`;
               observations.push(fileNote);
               pushSystemEvent(`Read file: ${basename(file.path)}`);
+              executedActions += 1;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Failed to read requested file.";
@@ -928,6 +1012,7 @@ Choose the next best action and return ONLY JSON.`;
               pushSystemEvent(
                 `Ran command (${result.exitCode ?? "none"}): ${sanitizedCommand.slice(0, 80)}`
               );
+              executedActions += 1;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Command execution failed.";
@@ -980,6 +1065,7 @@ Choose the next best action and return ONLY JSON.`;
               } finally {
                 setIsScanning(false);
               }
+              executedActions += 1;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Failed to apply file operations.";
@@ -994,6 +1080,7 @@ Choose the next best action and return ONLY JSON.`;
           `User request:\n${resolvedPrompt}\n\nObservations:\n${observations.join(
             "\n\n"
           )}\n\nReturn a concise final response for the user.`,
+          false,
           false
         );
 
@@ -1015,7 +1102,29 @@ Choose the next best action and return ONLY JSON.`;
           }
           assistantContent = await runAutonomousLoop();
         } else {
-          assistantContent = await callModel(systemPrompt, userPrompt, true);
+          assistantContent = await callModel(
+            systemPrompt,
+            userPrompt,
+            true,
+            hydratedContextFiles.length > 0
+          );
+        }
+
+        if (abortController.signal.aborted) {
+          const stoppedContent = assistantContent.trim()
+            ? `${assistantContent.trim()}\n\nStopped by user.`
+            : "Stopped by user.";
+          updateMessageContent(assistantMessageId, stoppedContent);
+          const assistantFinal: ChatMessage = {
+            id: assistantMessageId,
+            role: "assistant",
+            content: stoppedContent,
+            createdAt: buildTimestamp(),
+            projectPath: rootPath ?? undefined,
+            metadata: { intent }
+          };
+          void appendChatMessage(assistantFinal);
+          return stoppedContent;
         }
 
         let hasFileOperationDrafts = false;
@@ -1181,11 +1290,19 @@ Choose the next best action and return ONLY JSON.`;
         void appendChatMessage(assistantFinal);
         return assistantContent;
       } catch (error) {
+        if (abortController.signal.aborted) {
+          updateMessageContent(assistantMessageId, "Stopped by user.");
+          return "Stopped by user.";
+        }
+
         const message = error instanceof Error ? error.message : "Failed to generate assistant response.";
         setError(message);
         updateMessageContent(assistantMessageId, `Error: ${message}`);
         throw error;
       } finally {
+        if (activeAbortControllerRef.current === abortController) {
+          activeAbortControllerRef.current = null;
+        }
         setLoading(false);
       }
     },
@@ -1213,6 +1330,7 @@ Choose the next best action and return ONLY JSON.`;
   );
 
   return {
-    sendAssistantPrompt
+    sendAssistantPrompt,
+    stopAssistant
   };
 }

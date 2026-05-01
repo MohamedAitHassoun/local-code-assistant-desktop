@@ -133,7 +133,9 @@ struct ContextFileResult {
     size: u64,
     language: String,
     media_type: String,
+    mime_type: Option<String>,
     image_base64: Option<String>,
+    file_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +204,18 @@ struct OpenRouterChatRequest {
     user_prompt: String,
     temperature: f32,
     max_tokens: u32,
+    context_files: Option<Vec<OpenRouterContextFile>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenRouterContextFile {
+    path: String,
+    content: String,
+    media_type: Option<String>,
+    mime_type: Option<String>,
+    image_base64: Option<String>,
+    file_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,10 +311,10 @@ impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
             ai_provider: "openrouter".to_string(),
-            model_name: "qwen/qwen3.5-9b".to_string(),
+            model_name: "x-ai/grok-4.1-fast".to_string(),
             display_model_label: String::new(),
             openrouter_api_key: String::new(),
-            openrouter_model: "qwen/qwen3.5-9b".to_string(),
+            openrouter_model: "x-ai/grok-4.1-fast".to_string(),
             openrouter_endpoint: "https://openrouter.ai/api/v1/chat/completions".to_string(),
             agentic_mode: true,
             auto_apply_file_plans: false,
@@ -411,6 +425,34 @@ fn language_for_path(path: &Path) -> String {
         "pdf" | "docx" | "doc" => "document",
         "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" => "image",
         _ => "plaintext",
+    }
+    .to_string()
+}
+
+fn mime_type_for_path(path: &Path) -> String {
+    match file_extension(path).as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "pdf" => "application/pdf",
+        "docx" => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        "doc" => "application/msword",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "html" => "text/html",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "ts" => "application/typescript",
+        "py" => "text/x-python",
+        "java" => "text/x-java-source",
+        "c" => "text/x-c",
+        "cc" | "cpp" | "cxx" | "h" | "hpp" => "text/x-c++src",
+        _ => "application/octet-stream",
     }
     .to_string()
 }
@@ -1076,12 +1118,73 @@ async fn stream_openrouter_response(
         .build()
         .map_err(|err| err.to_string())?;
 
+    let mut user_content_parts = vec![json!({
+        "type": "text",
+        "text": request.user_prompt
+    })];
+
+    if let Some(context_files) = request.context_files.as_ref() {
+        for file in context_files {
+            let media_type = file.media_type.as_deref().unwrap_or("text").to_ascii_lowercase();
+            let file_mime = file
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| {
+                    mime_type_for_path(Path::new(&file.path))
+                });
+
+            if media_type == "image" {
+                if let Some(image_base64) = file.image_base64.as_ref() {
+                    let image_data_url = format!("data:{};base64,{}", file_mime, image_base64);
+                    user_content_parts.push(json!({
+                        "type": "text",
+                        "text": format!("Attached image: {}", file.path)
+                    }));
+                    user_content_parts.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_url
+                        }
+                    }));
+                }
+                continue;
+            }
+
+            if let Some(file_base64) = file.file_base64.as_ref() {
+                let file_data_url = format!("data:{};base64,{}", file_mime, file_base64);
+                user_content_parts.push(json!({
+                    "type": "text",
+                    "text": format!("Attached file: {}", file.path)
+                }));
+                user_content_parts.push(json!({
+                    "type": "file",
+                    "file": {
+                        "filename": file.path,
+                        "file_data": file_data_url
+                    }
+                }));
+                continue;
+            }
+
+            let text_content = if file.content.trim().is_empty() {
+                format!("Attached file: {}", file.path)
+            } else {
+                format!("Attached file: {}\n{}", file.path, file.content)
+            };
+
+            user_content_parts.push(json!({
+                "type": "text",
+                "text": text_content
+            }));
+        }
+    }
+
     let payload = json!({
         "model": model,
         "stream": true,
         "messages": [
             { "role": "system", "content": request.system_prompt },
-            { "role": "user", "content": request.user_prompt }
+            { "role": "user", "content": user_content_parts }
         ],
         "temperature": request.temperature,
         "max_tokens": request.max_tokens
@@ -1092,7 +1195,7 @@ async fn stream_openrouter_response(
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .header("HTTP-Referer", "https://local-code-assistant.app")
-        .header("X-Title", "Local Code Assistant")
+        .header("X-Title", "CopS.ai")
         .json(&payload)
         .send()
         .await
@@ -1855,9 +1958,7 @@ async fn read_context_file(
 
     tokio::task::spawn_blocking(move || {
         let resolved = resolve_read_path(&path, allowed_root.as_deref())?;
-        if !is_context_supported_file(&resolved) {
-            return Err("This file type is not supported for AI context yet.".to_string());
-        }
+        let mime_type = mime_type_for_path(&resolved);
 
         if is_image_file(&resolved) {
             let bytes = fs::read(&resolved)
@@ -1880,29 +1981,77 @@ async fn read_context_file(
                 size: encoded.len() as u64,
                 language: "image".to_string(),
                 media_type: "image".to_string(),
+                mime_type: Some(mime_type),
                 image_base64: Some(encoded),
+                file_base64: None,
             });
         }
 
-        let content = if is_document_file(&resolved) {
-            extract_document_text(&resolved)?
-        } else {
-            read_utf8_text_file(&resolved, max_bytes)?
-        };
+        let bytes = fs::read(&resolved)
+            .with_context(|| format!("Failed to read file: {}", resolved.display()))
+            .map_err(|err| err.to_string())?;
 
-        let media_type = if is_document_file(&resolved) {
-            "document".to_string()
-        } else {
-            "text".to_string()
-        };
+        if bytes.len() > max_image_bytes {
+            return Err(format!(
+                "File is too large for AI context ({} bytes; max {}).",
+                bytes.len(),
+                max_image_bytes
+            ));
+        }
 
+        if is_document_file(&resolved) {
+            let extracted = extract_document_text(&resolved).unwrap_or_else(|_| {
+                "Document attached. Text extraction was limited, but the raw file was included."
+                    .to_string()
+            });
+            let encoded = BASE64_STANDARD.encode(&bytes);
+
+            return Ok(ContextFileResult {
+                path: to_display_path(&resolved),
+                size: bytes.len() as u64,
+                language: language_for_path(&resolved),
+                media_type: "document".to_string(),
+                content: extracted,
+                mime_type: Some(mime_type),
+                image_base64: None,
+                file_base64: Some(encoded),
+            });
+        }
+
+        if !is_binary(&bytes) {
+            if bytes.len() > max_bytes {
+                return Err(format!(
+                    "Text file is too large for context ({} bytes; max {}).",
+                    bytes.len(),
+                    max_bytes
+                ));
+            }
+
+            let content = String::from_utf8(bytes)
+                .map_err(|_| "This file is not UTF-8 text or appears unreadable.".to_string())?;
+
+            return Ok(ContextFileResult {
+                path: to_display_path(&resolved),
+                size: content.len() as u64,
+                language: language_for_path(&resolved),
+                media_type: "text".to_string(),
+                content,
+                mime_type: Some(mime_type),
+                image_base64: None,
+                file_base64: None,
+            });
+        }
+
+        let encoded = BASE64_STANDARD.encode(bytes);
         Ok(ContextFileResult {
             path: to_display_path(&resolved),
-            size: content.len() as u64,
+            size: encoded.len() as u64,
             language: language_for_path(&resolved),
-            media_type,
-            content,
+            media_type: "binary".to_string(),
+            content: "Binary attachment included for AI context.".to_string(),
+            mime_type: Some(mime_type),
             image_base64: None,
+            file_base64: Some(encoded),
         })
     })
     .await

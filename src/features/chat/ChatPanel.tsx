@@ -12,6 +12,7 @@ interface ChatPanelProps {
   autoApproveEnabled: boolean;
   attachedFileCount: number;
   onSend: (prompt: string) => Promise<void>;
+  onStop: () => void;
   onAttachFiles: () => Promise<void>;
   onClearAttachedFiles: () => void;
   onClearHistory: () => Promise<void>;
@@ -52,6 +53,7 @@ export function ChatPanel({
   autoApproveEnabled,
   attachedFileCount,
   onSend,
+  onStop,
   onAttachFiles,
   onClearAttachedFiles,
   onClearHistory,
@@ -284,6 +286,15 @@ export function ChatPanel({
             >
               {loading ? "Working..." : "Send"}
             </button>
+            {loading && (
+              <button
+                type="button"
+                onClick={onStop}
+                className="rounded border border-danger bg-white px-3 py-1.5 text-sm text-danger hover:bg-red-50"
+              >
+                Stop
+              </button>
+            )}
           </div>
         </div>
       </div>

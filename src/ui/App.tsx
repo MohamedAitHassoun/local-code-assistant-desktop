@@ -90,7 +90,7 @@ export default function App() {
     applyPendingEdit
   } = useEditorStore();
 
-  const { sendAssistantPrompt } = useAssistant();
+  const { sendAssistantPrompt, stopAssistant } = useAssistant();
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.path === activePath) ?? null,
@@ -435,13 +435,7 @@ export default function App() {
       title: "Attach files for AI context",
       directory: false,
       multiple: true,
-      defaultPath: rootPath ?? undefined,
-      filters: [
-        {
-          name: "Documents",
-          extensions: ["pdf", "doc", "docx"]
-        }
-      ]
+      defaultPath: rootPath ?? undefined
     });
 
     if (!selected) {
@@ -449,21 +443,12 @@ export default function App() {
     }
 
     const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
-    const allowedPattern = /\.(pdf|doc|docx)$/i;
-    const validPaths = paths.filter((path) => allowedPattern.test(path));
-
-    if (validPaths.length === 0) {
-      setAppError("Only PDF, DOC, and DOCX files can be attached.");
+    if (paths.length === 0) {
       return;
     }
 
-    if (validPaths.length < paths.length) {
-      setAppError("Some selected files were skipped. Only PDF, DOC, and DOCX are supported.");
-    } else {
-      setAppError(null);
-    }
-
-    addContextFiles(validPaths);
+    addContextFiles(paths);
+    setAppError(null);
   };
 
   const handleInstallOllama = async () => {
@@ -847,6 +832,7 @@ export default function App() {
               autoApproveEnabled={settings.autoApproveActions}
               attachedFileCount={selectedContextFiles.length}
               onSend={handleSendChat}
+              onStop={stopAssistant}
               onAttachFiles={handleAttachContextFiles}
               onClearAttachedFiles={clearContextFiles}
               onClearHistory={handleClearHistory}

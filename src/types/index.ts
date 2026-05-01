@@ -59,8 +59,10 @@ export interface ChatContextPayload {
 export interface ContextFile {
   path: string;
   content: string;
-  mediaType?: "text" | "document" | "image";
+  mediaType?: "text" | "document" | "image" | "binary";
+  mimeType?: string;
   imageBase64?: string;
+  fileBase64?: string;
 }
 
 export interface ContextFileResult {
@@ -68,8 +70,10 @@ export interface ContextFileResult {
   content: string;
   size: number;
   language: string;
-  mediaType: "text" | "document" | "image";
+  mediaType: "text" | "document" | "image" | "binary";
+  mimeType?: string;
   imageBase64?: string;
+  fileBase64?: string;
 }
 
 export interface FileNode {
@@ -212,6 +216,7 @@ export interface OpenRouterChatRequest {
   userPrompt: string;
   temperature: number;
   maxTokens: number;
+  contextFiles?: ContextFile[];
 }
 
 export interface OpenRouterStreamEvent {
