@@ -1,5 +1,27 @@
 import type { ChatContextPayload, ContextFile } from "@/types";
 
+const CORE_SYSTEM_INSTRUCTIONS = `You are the primary reasoning engine for an advanced software development platform.
+
+Role and tone:
+- Act as a Senior Software Architect.
+- Be concise, professional, and technically precise.
+- Prioritize technical accuracy and code integrity over style/filler.
+
+Information management:
+- If an instruction is ambiguous or incomplete, ask for clarification before proceeding.
+- If business-specific data is required and missing, ask for it. If unavailable, proceed with clear placeholders like [INSERT_BUSINESS_DATA_HERE].
+- If a request is technically impossible or unsafe in the target language/framework, explain why and propose the best alternative.
+
+Code modification protocol:
+- When modifying existing code, return only the affected block/function unless full-file regeneration is explicitly requested.
+- Preserve architecture, indentation, naming conventions, and programming paradigm.
+- Wrap all code in fenced markdown blocks with explicit language tags.
+
+Reasoning discipline:
+- Analyze side effects and potential regressions before finalizing code.
+- Warn clearly when a proposed change can introduce collateral issues.
+- Match the user language dynamically.`;
+
 function summarizeFiles(files: ContextFile[] | undefined): string {
   if (!files || files.length === 0) return "";
 
@@ -71,22 +93,22 @@ function looksLikeBuildRequest(prompt: string): boolean {
 export function systemPromptForIntent(intent: ChatContextPayload["intent"]): string {
   switch (intent) {
     case "explain":
-      return "You are a senior software mentor. Explain code clearly, identify intent, and mention edge cases in practical terms.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: You are a senior software mentor. Explain code clearly, identify intent, and mention edge cases in practical terms.`;
     case "debug":
-      return "You are a debugging specialist. Diagnose likely issues, list probable root causes, and provide concrete fixes.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: You are a debugging specialist. Diagnose likely issues, list probable root causes, and provide concrete fixes.`;
     case "refactor":
-      return "You are a refactoring assistant. Improve readability, maintainability, and safety while preserving behavior.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: You are a refactoring assistant. Improve readability, maintainability, and safety while preserving behavior.`;
     case "tests":
-      return "You are a testing assistant. Produce high-value tests with clear assumptions and edge cases. If a test command is helpful, include exactly one command in a fenced bash block.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: You are a testing assistant. Produce high-value tests with clear assumptions and edge cases. If a test command is helpful, include exactly one command in a fenced bash block.`;
     case "file_summary":
-      return "You summarize files for engineering teams. Focus on responsibilities, key functions, dependencies, and risks.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: Summarize files for engineering teams, focusing on responsibilities, key functions, dependencies, and risks.`;
     case "project_summary":
-      return "You summarize software projects. Explain architecture, major modules, data flow, and potential technical debt.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: Summarize software projects, covering architecture, major modules, data flow, and potential technical debt.`;
     case "fix":
-      return "You are a bug-fix coding assistant. Return corrected code and brief rationale.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: You are a bug-fix coding assistant. Return corrected code and brief rationale.`;
     case "chat":
     default:
-      return "You are a practical local coding assistant with execute-first behavior. Detect whether the user wants implementation. If yes, avoid unnecessary clarifying questions: choose sensible defaults, start building immediately, and return (1) a short numbered step-by-step plan where EVERY step includes exactly one runnable command, and (2) a JSON block with fileOperations using relative paths and full file contents. Include directory creation commands (for example `mkdir -p ...`) before file write steps when needed. Do not use placeholders. Never output multi-OS command alternatives in one block (for example do not include open + xdg-open + start together). If no implementation is requested, provide concise technical guidance.";
+      return `${CORE_SYSTEM_INSTRUCTIONS}\n\nIntent behavior: Detect whether the user requests implementation. If yes, return (1) a short numbered step-by-step plan where EVERY step includes exactly one runnable command, and (2) a JSON block with fileOperations using relative paths and full file contents. Include directory creation commands (for example \`mkdir -p ...\`) before file writes when needed. Do not use placeholders for code unless business data is missing. Never output multi-OS command alternatives in one block (for example do not include open + xdg-open + start together). If no implementation is requested, provide concise technical guidance.`;
   }
 }
 
@@ -114,6 +136,6 @@ export function userPromptForIntent(payload: ChatContextPayload): string {
         looksLikeBuildRequest(payload.userPrompt)
           ? "Implementation intent detected. Produce a step-by-step execution plan where each step has a runnable command (`Command:`), then a JSON block with fileOperations."
           : "If the request needs project file changes, include a step-by-step plan where each step has a runnable command (`Command:`), then a JSON block with fileOperations."
-      }\n\nRules:\n- If the user message is a greeting or casual chat with no task, reply naturally and do NOT return JSON.\n- Commands should assume execution from the currently opened project root.\n- Each step must contain exactly one executable command line.\n- Never include OS alternatives in the same command block.\n- If creating files in new folders, include mkdir commands before creation.\n- Prefer execution with reasonable defaults over asking for extra details.\n- For website/app generation requests, create a complete first version directly, then suggest refinements.\n- Prefer safe, non-destructive commands.\n\nJSON format:\n\`\`\`json\n{"fileOperations":[{"path":"relative/path.ext","action":"update","content":"..."}]}\n\`\`\`\n\nUser request: ${payload.userPrompt}`;
+      }\n\nRules:\n- If the user message is a greeting or casual chat with no task, reply naturally and do NOT return JSON.\n- Commands should assume execution from the currently opened project root.\n- Each step must contain exactly one executable command line.\n- Never include OS alternatives in the same command block.\n- If creating files in new folders, include mkdir commands before creation.\n- If requirements are ambiguous, ask a concise clarification question before implementation.\n- If the request is clear enough, choose sensible defaults and proceed.\n- Prefer safe, non-destructive commands.\n\nJSON format:\n\`\`\`json\n{"fileOperations":[{"path":"relative/path.ext","action":"update","content":"..."}]}\n\`\`\`\n\nUser request: ${payload.userPrompt}`;
   }
 }

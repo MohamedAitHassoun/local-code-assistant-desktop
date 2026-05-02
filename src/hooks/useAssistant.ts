@@ -151,28 +151,6 @@ function shouldUseAutonomousForPrompt(prompt: string): boolean {
   );
 }
 
-function looksLikeClarificationRequest(message: string): boolean {
-  const normalized = message.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-
-  const clarificationHints = [
-    "need more information",
-    "need more details",
-    "please provide",
-    "can you provide",
-    "which one",
-    "what should",
-    "what do you want",
-    "i need",
-    "not enough information",
-    "unclear"
-  ];
-
-  return clarificationHints.some((hint) => normalized.includes(hint)) || normalized.includes("?");
-}
-
 type AgentDecision =
   | {
       action: "read_file";
@@ -835,7 +813,6 @@ export function useAssistant() {
           settings.commandExecutionEnabled || settings.fullAccessMode;
         const repeatedActionCounts = new Map<string, number>();
         const duplicateActionLimit = 2;
-        let executedActions = 0;
 
         for (let step = 1; step <= maxSteps; step += 1) {
           if (abortController.signal.aborted) {
@@ -845,6 +822,8 @@ export function useAssistant() {
           pushSystemEvent(`Working... step ${step}/${maxSteps}`);
 
           const agentSystemPrompt = `You are an autonomous local coding agent with tool-like actions.
+Act as a Senior Software Architect: concise, precise, and technically rigorous.
+
 Return ONLY JSON with one action:
 {"action":"read_file","path":"relative/or/absolute/path","reason":"..."}
 {"action":"run_command","command":"single command","reason":"..."}
@@ -854,11 +833,14 @@ Return ONLY JSON with one action:
 Rules:
 - Inspect files before explaining project internals.
 - If user asks about a specific file, read that file first.
-- Execute first. Do not ask clarifying questions unless truly blocked.
-- For creation/build tasks, choose sensible defaults and produce a complete first version directly.
+- If requirements are ambiguous and multiple implementations are possible, ask a clear clarification question with action=final before proceeding.
+- If essential business-specific data is missing (names, legal text, credentials, etc.), ask for it; if not required, proceed with clear placeholders.
+- For creation/build tasks, choose sensible defaults when the request is clear enough, then implement directly.
 - If the user asks for a new project/site/app, create needed folders/files yourself inside the current project root.
 - Use one command at a time (EXACTLY one command string, no newlines, no command lists).
 - For creating/updating/deleting source files, ALWAYS use apply_file_operations with full contents.
+- Preserve existing architecture/style/naming when modifying existing files.
+- Before applying edits, reason about side effects; if risk exists, mention it in reason.
 - Keep apply_file_operations focused: prefer small batches (1-3 files per step), then continue.
 - Do NOT use run_command to write file contents (no echo/printf/cat heredoc/redirection/tee for code files).
 - Use run_command only for safe inspection/testing/opening tasks.
@@ -929,16 +911,6 @@ Choose the next best action and return ONLY JSON.`;
           }
 
           if (decision.action === "final") {
-            if (
-              executionRequest &&
-              executedActions === 0 &&
-              looksLikeClarificationRequest(decision.message)
-            ) {
-              observations.push(
-                "Assistant asked for extra clarification before executing. Continue with reasonable defaults and execute now."
-              );
-              continue;
-            }
             return decision.message || "Task completed.";
           }
 
@@ -959,7 +931,6 @@ Choose the next best action and return ONLY JSON.`;
               )}`;
               observations.push(fileNote);
               pushSystemEvent(`Read file: ${basename(file.path)}`);
-              executedActions += 1;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Failed to read requested file.";
@@ -1012,7 +983,6 @@ Choose the next best action and return ONLY JSON.`;
               pushSystemEvent(
                 `Ran command (${result.exitCode ?? "none"}): ${sanitizedCommand.slice(0, 80)}`
               );
-              executedActions += 1;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Command execution failed.";
@@ -1065,7 +1035,6 @@ Choose the next best action and return ONLY JSON.`;
               } finally {
                 setIsScanning(false);
               }
-              executedActions += 1;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : "Failed to apply file operations.";
