@@ -131,11 +131,6 @@ export function ChatPanel({
     }
   };
 
-  const providerHint =
-    aiProvider === "openrouter"
-      ? "Using managed OpenRouter API for responses."
-      : "Everything stays local with Ollama.";
-
   return (
     <aside className="flex h-full min-h-0 flex-col border-l border-border bg-panel/95">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -267,7 +262,7 @@ export function ChatPanel({
         )}
         <div className="mt-2 flex items-center justify-between">
           <span className="text-xs text-ink/50">
-            {loading ? "Please wait until the current task is finished." : providerHint}
+            {loading ? "Please wait until the current task is finished." : ""}
           </span>
           <div className="flex items-center gap-2">
             <button
