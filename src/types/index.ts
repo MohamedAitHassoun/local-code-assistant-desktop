@@ -219,6 +219,14 @@ export interface OpenRouterChatRequest {
   contextFiles?: ContextFile[];
 }
 
+export interface OpenRouterModel {
+  id: string;
+  name?: string;
+  contextLength?: number;
+  pricingPrompt?: string;
+  pricingCompletion?: string;
+}
+
 export interface OpenRouterStreamEvent {
   requestId: string;
   delta?: string;

@@ -68,32 +68,34 @@ export const DEFAULT_ALLOWED_COMMAND_PREFIXES = [
   "gradle test"
 ];
 
-export const FIXED_AI_PROVIDER: AppSettings["aiProvider"] = "openrouter";
-export const FIXED_OPENROUTER_MODEL = "x-ai/grok-4.1-fast";
-export const FIXED_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-export const EMBEDDED_OPENROUTER_API_KEY = (import.meta.env.VITE_OPENROUTER_API_KEY ?? "").trim();
+export const DEFAULT_AI_PROVIDER: AppSettings["aiProvider"] = "openrouter";
+export const DEFAULT_OPENROUTER_MODEL = "x-ai/grok-4.1-fast";
+export const DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
-export function normalizeLockedAiSettings(settings: AppSettings): AppSettings {
-  const embeddedKey = EMBEDDED_OPENROUTER_API_KEY;
-  const resolvedApiKey = embeddedKey || settings.openrouterApiKey.trim();
+export function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const apiProvider = settings.aiProvider || DEFAULT_AI_PROVIDER;
+  const openrouterModel = settings.openrouterModel?.trim() || DEFAULT_OPENROUTER_MODEL;
+  const openrouterEndpoint =
+    settings.openrouterEndpoint?.trim() || DEFAULT_OPENROUTER_ENDPOINT;
 
   return {
     ...settings,
-    aiProvider: FIXED_AI_PROVIDER,
-    modelName: FIXED_OPENROUTER_MODEL,
-    openrouterModel: FIXED_OPENROUTER_MODEL,
-    openrouterEndpoint: FIXED_OPENROUTER_ENDPOINT,
-    openrouterApiKey: resolvedApiKey
+    aiProvider: apiProvider,
+    modelName: openrouterModel,
+    openrouterModel,
+    openrouterEndpoint,
+    openrouterApiKey: settings.openrouterApiKey?.trim() ?? "",
+    displayModelLabel: settings.displayModelLabel?.trim() ?? ""
   };
 }
 
 const BASE_DEFAULT_SETTINGS: AppSettings = {
-  aiProvider: "openrouter",
-  modelName: FIXED_OPENROUTER_MODEL,
+  aiProvider: DEFAULT_AI_PROVIDER,
+  modelName: DEFAULT_OPENROUTER_MODEL,
   displayModelLabel: "",
-  openrouterApiKey: EMBEDDED_OPENROUTER_API_KEY,
-  openrouterModel: FIXED_OPENROUTER_MODEL,
-  openrouterEndpoint: FIXED_OPENROUTER_ENDPOINT,
+  openrouterApiKey: "",
+  openrouterModel: DEFAULT_OPENROUTER_MODEL,
+  openrouterEndpoint: DEFAULT_OPENROUTER_ENDPOINT,
   agenticMode: true,
   autoApplyFilePlans: false,
   autoApproveActions: false,
@@ -115,7 +117,7 @@ const BASE_DEFAULT_SETTINGS: AppSettings = {
   allowedCommandPrefixes: DEFAULT_ALLOWED_COMMAND_PREFIXES
 };
 
-export const DEFAULT_SETTINGS: AppSettings = normalizeLockedAiSettings(BASE_DEFAULT_SETTINGS);
+export const DEFAULT_SETTINGS: AppSettings = normalizeAppSettings(BASE_DEFAULT_SETTINGS);
 
 export const MAX_READABLE_FILE_BYTES = 1_500_000;
 export const CHUNK_SIZE_CHARS = 1800;

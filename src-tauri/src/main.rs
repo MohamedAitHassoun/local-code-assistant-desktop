@@ -220,6 +220,16 @@ struct OpenRouterContextFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct OpenRouterModel {
+    id: String,
+    name: Option<String>,
+    context_length: Option<u64>,
+    pricing_prompt: Option<String>,
+    pricing_completion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CodexChatRequest {
     system_prompt: String,
     user_prompt: String,
@@ -399,6 +409,39 @@ fn init_db_schema(db_path: &Path) -> Result<(), String> {
 
 fn normalize_endpoint(endpoint: &str) -> String {
     endpoint.trim().trim_end_matches('/').to_string()
+}
+
+fn openrouter_models_endpoint(endpoint: &str) -> String {
+    let normalized = normalize_endpoint(endpoint);
+    if normalized.is_empty() {
+        return "https://openrouter.ai/api/v1/models".to_string();
+    }
+
+    if normalized.ends_with("/chat/completions") {
+        return format!(
+            "{}{}",
+            normalized.trim_end_matches("/chat/completions"),
+            "/models"
+        );
+    }
+
+    if normalized.ends_with("/api/v1") {
+        return format!("{normalized}/models");
+    }
+
+    if normalized.ends_with("/models") {
+        return normalized;
+    }
+
+    if normalized.contains("/api/v1/") {
+        let before = normalized
+            .split("/api/v1/")
+            .next()
+            .unwrap_or("https://openrouter.ai");
+        return format!("{before}/api/v1/models");
+    }
+
+    "https://openrouter.ai/api/v1/models".to_string()
 }
 
 fn file_extension(path: &Path) -> String {
@@ -2611,6 +2654,99 @@ async fn ollama_list_models(endpoint: String) -> Result<Vec<OllamaModel>, String
     Ok(parsed.models)
 }
 
+#[tauri::command]
+async fn openrouter_list_models(
+    endpoint: String,
+    api_key: String,
+    limit: Option<usize>,
+) -> Result<Vec<OpenRouterModel>, String> {
+    let trimmed_key = api_key.trim().to_string();
+    if trimmed_key.is_empty() {
+        return Err("OpenRouter API key is missing.".to_string());
+    }
+
+    let models_url = openrouter_models_endpoint(&endpoint);
+    let max_items = limit.unwrap_or(400).clamp(10, 1000);
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    let response = client
+        .get(models_url)
+        .header("Authorization", format!("Bearer {trimmed_key}"))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|err| format!("Failed to fetch OpenRouter models: {err}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "No response body".to_string());
+        return Err(format!("OpenRouter models request failed ({status}): {body}"));
+    }
+
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|err| format!("Invalid OpenRouter models response: {err}"))?;
+
+    let rows = payload
+        .get("data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "OpenRouter returned an unexpected models payload.".to_string())?;
+
+    let mut models: Vec<OpenRouterModel> = rows
+        .iter()
+        .filter_map(|row| {
+            let id = row.get("id").and_then(|value| value.as_str())?.trim().to_string();
+            if id.is_empty() {
+                return None;
+            }
+
+            let name = row
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+
+            let context_length = row.get("context_length").and_then(|value| value.as_u64());
+            let pricing_prompt = row
+                .get("pricing")
+                .and_then(|value| value.get("prompt"))
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let pricing_completion = row
+                .get("pricing")
+                .and_then(|value| value.get("completion"))
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+
+            Some(OpenRouterModel {
+                id,
+                name,
+                context_length,
+                pricing_prompt,
+                pricing_completion,
+            })
+        })
+        .collect();
+
+    models.sort_by(|a, b| a.id.to_ascii_lowercase().cmp(&b.id.to_ascii_lowercase()));
+    models.truncate(max_items);
+
+    if models.is_empty() {
+        return Err("No OpenRouter models were returned for this API key.".to_string());
+    }
+
+    Ok(models)
+}
+
 fn is_model_name_char(ch: char) -> bool {
     ch.is_ascii_lowercase()
         || ch.is_ascii_digit()
@@ -2865,6 +3001,7 @@ fn main() {
             apply_file_operations,
             ollama_status,
             ollama_list_models,
+            openrouter_list_models,
             ollama_search_models,
             install_ollama,
             start_ollama,

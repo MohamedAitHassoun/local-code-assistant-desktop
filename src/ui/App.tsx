@@ -32,8 +32,7 @@ import { useProjectStore } from "@/stores/projectStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { TopToolbar } from "./layout/TopToolbar";
 import {
-  EMBEDDED_OPENROUTER_API_KEY,
-  normalizeLockedAiSettings
+  normalizeAppSettings
 } from "@/lib/constants";
 import type {
   ChatMessage,
@@ -171,7 +170,7 @@ export default function App() {
       let provider: typeof settings.aiProvider = settings.aiProvider;
       try {
         const loaded = await loadSettings();
-        const normalizedLoaded = normalizeLockedAiSettings({ ...loaded });
+        const normalizedLoaded = normalizeAppSettings({ ...loaded });
         replaceSettings(normalizedLoaded);
         endpoint = normalizedLoaded.ollamaEndpoint;
         provider = normalizedLoaded.aiProvider;
@@ -392,11 +391,11 @@ export default function App() {
   const onboardingMessage = useMemo(() => {
     if (settings.aiProvider === "openrouter") {
       if (!settings.openrouterApiKey.trim()) {
-        if (EMBEDDED_OPENROUTER_API_KEY) {
-          return "OpenRouter key is configured but currently unavailable. Restart the app.";
-        }
+        return "Add your OpenRouter API key in Settings to start using the assistant.";
+      }
 
-        return "This build is missing an embedded OpenRouter API key. Set VITE_OPENROUTER_API_KEY before building.";
+      if (!settings.openrouterModel.trim()) {
+        return "Choose an OpenRouter model in Settings before sending prompts.";
       }
 
       return null;
@@ -418,7 +417,8 @@ export default function App() {
   }, [
     ollamaStatus,
     settings.aiProvider,
-    settings.openrouterApiKey
+    settings.openrouterApiKey,
+    settings.openrouterModel
   ]);
 
   const handleClearHistory = async () => {
@@ -478,7 +478,7 @@ export default function App() {
   };
 
   const handleSaveSettings = async (nextSettings: typeof settings) => {
-    const normalizedSettings = normalizeLockedAiSettings({
+    const normalizedSettings = normalizeAppSettings({
       ...nextSettings,
       workingOnlyMode: true
     });
@@ -491,7 +491,7 @@ export default function App() {
   };
 
   const persistSettingsPatch = (patch: Partial<typeof settings>) => {
-    const next = normalizeLockedAiSettings({
+    const next = normalizeAppSettings({
       ...settings,
       ...patch,
       workingOnlyMode: true

@@ -11,9 +11,7 @@ import { replaceSelectionInText } from "@/lib/editor";
 import { applyFileOperations, readContextFile, scanProject } from "@/services/fileSystem";
 import { streamOpenRouterChat } from "@/services/openrouter/client";
 import {
-  EMBEDDED_OPENROUTER_API_KEY,
-  FIXED_OPENROUTER_ENDPOINT,
-  FIXED_OPENROUTER_MODEL
+  DEFAULT_OPENROUTER_ENDPOINT
 } from "@/lib/constants";
 import { chooseTopFilesForContext } from "@/services/project/analysis";
 import { systemPromptForIntent, userPromptForIntent } from "@/services/prompts/templates";
@@ -730,18 +728,24 @@ export function useAssistant() {
           return "";
         }
 
-        const runtimeKey = EMBEDDED_OPENROUTER_API_KEY || settings.openrouterApiKey.trim();
+        const runtimeKey = settings.openrouterApiKey.trim();
+        const runtimeModel = settings.openrouterModel.trim();
+        const runtimeEndpoint =
+          settings.openrouterEndpoint.trim() || DEFAULT_OPENROUTER_ENDPOINT;
+
         if (!runtimeKey) {
-          throw new Error(
-            "OpenRouter API key is missing in this build. Set VITE_OPENROUTER_API_KEY and rebuild."
-          );
+          throw new Error("OpenRouter API key is missing. Add it in Settings.");
+        }
+
+        if (!runtimeModel) {
+          throw new Error("OpenRouter model is missing. Select a model in Settings.");
         }
 
         return streamOpenRouterChat(
           {
-            endpoint: FIXED_OPENROUTER_ENDPOINT,
+            endpoint: runtimeEndpoint,
             apiKey: runtimeKey,
-            model: FIXED_OPENROUTER_MODEL,
+            model: runtimeModel,
             systemPrompt: modelSystemPrompt,
             userPrompt: modelUserPrompt,
             temperature: settings.temperature,

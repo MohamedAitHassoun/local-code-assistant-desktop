@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn, listen } from "@tauri-apps/api/event";
 import type {
   OpenRouterChatRequest,
+  OpenRouterModel,
   OpenRouterStreamEvent
 } from "@/types";
 
@@ -161,4 +162,16 @@ export async function streamOpenRouterChat(
       throw new Error(friendlyOpenRouterError(extractErrorText(retryError)));
     }
   }
+}
+
+export async function listOpenRouterModels(
+  endpoint: string,
+  apiKey: string,
+  limit = 400
+): Promise<OpenRouterModel[]> {
+  return invoke("openrouter_list_models", {
+    endpoint,
+    apiKey,
+    limit
+  });
 }

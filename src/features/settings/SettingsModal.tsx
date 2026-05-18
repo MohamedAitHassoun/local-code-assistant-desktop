@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
-  normalizeLockedAiSettings
+  DEFAULT_OPENROUTER_ENDPOINT,
+  normalizeAppSettings
 } from "@/lib/constants";
-import type { AppSettings } from "@/types";
+import { listOpenRouterModels } from "@/services/openrouter/client";
+import type { AppSettings, OpenRouterModel } from "@/types";
 
 interface SettingsModalProps {
   open: boolean;
@@ -21,30 +23,82 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [form, setForm] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   useEffect(() => {
     setForm(settings);
+    setModelsError(null);
   }, [settings]);
 
   if (!open) {
     return null;
   }
 
+  const extractErrorMessage = (error: unknown, fallback: string): string => {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    if (typeof error === "string") {
+      return error;
+    }
+    return fallback;
+  };
+
   const updateForm = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const loadModels = async () => {
+    const apiKey = form.openrouterApiKey.trim();
+    if (!apiKey) {
+      setModelsError("Enter your OpenRouter API key first.");
+      setModels([]);
+      return;
+    }
+
+    setLoadingModels(true);
+    setModelsError(null);
+    try {
+      const endpoint = form.openrouterEndpoint.trim() || DEFAULT_OPENROUTER_ENDPOINT;
+      const fetched = await listOpenRouterModels(endpoint, apiKey, 500);
+      setModels(fetched);
+
+      if (
+        fetched.length > 0 &&
+        !fetched.some((model) => model.id === form.openrouterModel)
+      ) {
+        updateForm("openrouterModel", fetched[0].id);
+      }
+    } catch (error) {
+      setModels([]);
+      setModelsError(extractErrorMessage(error, "Failed to load OpenRouter models."));
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const modelOptions = Array.from(
+    new Set(
+      [
+        form.openrouterModel.trim(),
+        ...models.map((model) => model.id.trim())
+      ].filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
   const submit = async () => {
     setSaving(true);
     try {
-      const nextSettings = normalizeLockedAiSettings({
+      const normalized = normalizeAppSettings({
         ...form,
         workingOnlyMode: true,
         commandExecutionEnabled: form.fullAccessMode ? true : form.commandExecutionEnabled,
         allowAnyCommand: form.fullAccessMode ? true : form.allowAnyCommand
       });
 
-      await onSave(nextSettings);
+      await onSave(normalized);
       onClose();
     } finally {
       setSaving(false);
@@ -66,6 +120,83 @@ export function SettingsModal({
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="rounded-lg border border-border bg-slate-50 p-3 md:col-span-2">
+            <p className="mb-2 text-sm font-medium text-ink">OpenRouter</p>
+            <p className="mb-3 text-xs text-ink/70">
+              Users add their own OpenRouter key, load available models, then choose one.
+            </p>
+
+            <label className="text-sm text-ink">
+              OpenRouter API key
+              <input
+                type="password"
+                value={form.openrouterApiKey}
+                onChange={(event) => updateForm("openrouterApiKey", event.target.value)}
+                className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
+                placeholder="sk-or-v1-..."
+                autoComplete="off"
+              />
+            </label>
+
+            <label className="mt-3 block text-sm text-ink">
+              OpenRouter endpoint
+              <input
+                value={form.openrouterEndpoint}
+                onChange={(event) => updateForm("openrouterEndpoint", event.target.value)}
+                className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
+                placeholder={DEFAULT_OPENROUTER_ENDPOINT}
+              />
+            </label>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void loadModels()}
+                disabled={loadingModels}
+                className="rounded border border-border bg-white px-3 py-1.5 text-sm text-ink hover:bg-slate-100 disabled:opacity-70"
+              >
+                {loadingModels ? "Loading models..." : "Load OpenRouter models"}
+              </button>
+              <span className="text-xs text-ink/60">
+                {models.length > 0 ? `${models.length} models loaded` : "No model list loaded yet"}
+              </span>
+            </div>
+
+            {modelsError && (
+              <p className="mt-2 rounded border border-danger/30 bg-red-50 px-2 py-1 text-xs text-danger">
+                {modelsError}
+              </p>
+            )}
+
+            <label className="mt-3 block text-sm text-ink">
+              OpenRouter model
+              <select
+                value={form.openrouterModel}
+                onChange={(event) => updateForm("openrouterModel", event.target.value)}
+                className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
+              >
+                {modelOptions.length === 0 && (
+                  <option value="">No models loaded yet</option>
+                )}
+                {modelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {modelId}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="mt-3 block text-sm text-ink">
+              Or enter model id manually
+              <input
+                value={form.openrouterModel}
+                onChange={(event) => updateForm("openrouterModel", event.target.value)}
+                className="mt-1 w-full rounded border border-border bg-white px-3 py-2"
+                placeholder="for example: anthropic/claude-sonnet-4"
+              />
+            </label>
+          </div>
+
           <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
             <input
               type="checkbox"
